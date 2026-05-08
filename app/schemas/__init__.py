@@ -1,7 +1,4 @@
-from .user import (
-    UserBase, UserCreate, UserUpdate, UserResponse
-)
+# Export any schemas for the recommendation system here
+# Currently no user schemas are handled here as they are managed by the auth system.
 
-__all__ = [
-   "UserBase", "UserCreate", "UserUpdate", "UserResponse"
-]
+__all__ = []

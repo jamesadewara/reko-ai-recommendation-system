@@ -1,34 +1,32 @@
 import logging
-import asyncio
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-import logging
-import asyncio
-from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
-from app.db import init_db
-from app.core.broker import init_broker, shutdown_broker
 from fastapi.responses import HTMLResponse
+
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.db.session import init_db
+from app.core.broker import init_broker, shutdown_broker
 
 # Initialize logging as soon as possible
 setup_logging()
 
-from app.api.v1.endpoints.authentication import router as authentication_router
-from fastapi import Depends
+# Import Routers
+from app.api.v1.endpoints.chats import router as chats_router
+from app.api.v1.endpoints.websocket import router as ws_router
 
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ──
-    logger.info("🚀 [Lifespan] Starting up Reko AI System")
+    logger.info(f"🚀 [Lifespan] Starting up {settings.APP_NAME}")
     
     try:
-        # 1. Initialize Database (Native PyMongo AsyncMongoClient via Beanie)
+        # 1. Initialize Database (MongoDB via Beanie)
         logger.info("🔗 [Database] Connecting to MongoDB...")
         app.state.mongo_client = await init_db(
             settings.DATABASE_URL, 
@@ -50,7 +48,7 @@ async def lifespan(app: FastAPI):
     
     finally:
         # ── Shutdown ──
-        logger.info("🛑 [Lifespan] Shutting down Reko AI System...")
+        logger.info(f"🛑 [Lifespan] Shutting down {settings.APP_NAME}...")
         
         # 1. Shutdown TaskIQ
         await shutdown_broker()
@@ -65,10 +63,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.APP_NAME,
-    description="Reko AI Authentication System - Manages user accounts, authentication, and authorization for the Reko ecosystem.",
+    description="Reko AI Recommendation System - Handles product analysis, user preferences, and real-time AI chat.",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url=None,       # disabled — served manually below to avoid CDN blocking
+    redoc_url=None,
     lifespan=lifespan,
 )
 
@@ -81,19 +79,17 @@ app.add_middleware(
 )
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
-# ── Health Check ──────────────────────────────────────────────────────────────
+
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "reko-ai-system"}
+    return {"status": "ok", "service": settings.APP_NAME}
 
 @app.get("/", include_in_schema=False)
 async def root():
-    return {"message": "Reko AI System is running", "version": "1.0.0"}
+    return {"message": f"{settings.APP_NAME} is running", "version": "1.0.0"}
 
 @app.get("/redoc", include_in_schema=False)
 async def redoc_html():
-    # Serves ReDoc using unpkg CDN instead of jsdelivr.net
-    # jsdelivr is blocked by Edge/Safari tracking prevention
     return HTMLResponse(f"""
 <!DOCTYPE html>
 <html>
@@ -110,5 +106,9 @@ async def redoc_html():
 </html>
 """)
 
-app.include_router(authentication_router, prefix="/api/v1/auth", tags=["Authentication"])
-app.include_router(ws_router, prefix="/api/v1/notifications", tags=["websocket"])
+# Register API Routers
+app.include_router(chats_router, prefix="/api/v1/chats", tags=["Chats"])
+app.include_router(ws_router, prefix="/api/v1/ws", tags=["WebSocket"])
+
+# Import tasks to ensure they are registered
+import app.tasks.birthday

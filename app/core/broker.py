@@ -1,32 +1,34 @@
 import logging
+from taskiq_aio_pika import AioPikaBroker
+from taskiq import TaskiqEvents
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 # ── Broker ─────────────────────────────────────────────────────────────────────
-# We define the broker here, but we connect it inside the lifespan to avoid blocking.
-broker = PubSubBroker(settings.RABBITMQ_URL).with_result_backend(result_backend)
+# RabbitMQ broker for Taskiq (No Redis)
+broker = AioPikaBroker(settings.RABBITMQ_URL)
+
+@broker.on_event(TaskiqEvents.WORKER_STARTUP)
+async def worker_startup(state):
+    """
+    Initialize connections when worker starts.
+    """
+    # If there's a DB verification needed for the recommendation system, add it here
+    logger.info("[TaskIQ] Worker started.")
 
 async def init_broker():
     """
-    Asynchronously connect the TaskIQ broker.
-    Called inside the FastAPI lifespan.
+    Connect broker during app startup.
     """
-    logger.info("[TaskIQ] Connecting broker...")
-    try:
+    if not broker.is_lazy_startup:
         await broker.startup()
-        logger.info("[TaskIQ] Broker connected successfully.")
-    except Exception as e:
-        logger.error(f"[TaskIQ] Failed to connect broker: {e}")
-        raise
+    logger.info("[TaskIQ] Broker initialized.")
 
 async def shutdown_broker():
     """
-    Gracefully shutdown the TaskIQ broker.
+    Gracefully disconnect.
     """
-    logger.info("[TaskIQ] Shutting down broker...")
-    try:
-        await broker.shutdown()
-        logger.info("[TaskIQ] Broker shutdown complete.")
-    except Exception as e:
-        logger.error(f"[TaskIQ] Error during broker shutdown: {e}")
+    await broker.shutdown()
+    logger.info("[TaskIQ] Broker shutdown.")

@@ -1,10 +1,11 @@
 import logging
+import os
 from typing import Optional, Any
 from functools import lru_cache
 
 import httpx
 import jwt
-from fastapi import Request, HTTPException, Security, status, Depends
+from fastapi import Request, HTTPException, Security, status, Depends, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jwt.exceptions import PyJWTError, ExpiredSignatureError
 
@@ -15,12 +16,12 @@ logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
+# ── JWKS Cache ──────────────────────────────────────────────────────────────
 _JWKS_CACHE: Optional[dict] = None
 
 async def get_jwks() -> dict:
     """
-    Fetch and cache the JWKS from luxe-auth (Django) asynchronously.
-    Cached for the lifetime of the process.
+    Fetch and cache the JWKS from the auth service asynchronously.
     """
     global _JWKS_CACHE
     if _JWKS_CACHE is not None:
@@ -38,31 +39,80 @@ async def get_jwks() -> dict:
         return {}
 
 
+# ── Local RSA Key (RS2A) Loader ──────────────────────────────────────────────
+
+@lru_cache(maxsize=1)
+def get_local_public_key() -> Optional[str]:
+    """
+    Loads the RS256 public key from environment variable or disk.
+    This corresponds to the 'RS2A key' mentioned in requirements.
+    """
+    # 1. Try from environment variable directly
+    if settings.JWT_PUBLIC_KEY:
+        logger.info("[Security] Using RSA Public Key from environment.")
+        return settings.JWT_PUBLIC_KEY
+
+    # 2. Try from local file
+    try:
+        if os.path.exists(settings.JWT_PUBLIC_KEY_PATH):
+            with open(settings.JWT_PUBLIC_KEY_PATH, "r") as f:
+                content = f.read().strip()
+                if content:
+                    logger.info(f"[Security] Using RSA Public Key from {settings.JWT_PUBLIC_KEY_PATH}")
+                    return content
+    except Exception as e:
+        logger.warning(f"[Security] Could not read public key file: {e}")
+
+    return None
+
+
 async def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)) -> dict:
     """
-    Verifies an RS256 JWT issued by luxe-auth using remote JWKS.
-    Returns the full decoded payload (claims dict) if valid.
+    Verifies an RS256 JWT using either a local RSA public key (RS2A) or remote JWKS.
+    Prioritises the local key for performance and reliability.
     """
     token = credentials.credentials
-    jwks = await get_jwks()
+    
+    # 1. Attempt Verification with Local RSA Key (RS2A)
+    local_key = get_local_public_key()
+    if local_key:
+        try:
+            payload = jwt.decode(
+                token,
+                local_key,
+                algorithms=[settings.JWT_ALGORITHM],
+                options={"verify_aud": False},
+            )
+            # Normalise user identity
+            if "user_id" not in payload and "sub" in payload:
+                payload["user_id"] = payload["sub"]
+            return payload
+        except ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired.")
+        except PyJWTError:
+            # If local key fails but we have JWKS, we might want to try JWKS 
+            # in case keys were rotated and local file is stale.
+            if not settings.JWKS_URL:
+                raise HTTPException(status_code=401, detail="Invalid token.")
+            logger.debug("[Security] Local RSA verification failed, falling back to JWKS")
 
+    # 2. Fallback to JWKS Verification
+    jwks = await get_jwks()
     if not jwks or "keys" not in jwks:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Auth service unreachable. Cannot validate token.",
+            detail="Auth service unreachable and no local key available.",
         )
 
     try:
         header = jwt.get_unverified_header(token)
         rsa_key = {}
 
-        # Match by kid (Key ID) first — most reliable method
         for key in jwks["keys"]:
             if key.get("kid") == header.get("kid"):
                 rsa_key = {k: key[k] for k in ("kty", "kid", "use", "n", "e") if k in key}
                 break
 
-        # Fallback: use the first key if no kid match (single-key providers)
         if not rsa_key and jwks["keys"]:
             rsa_key = jwks["keys"][0]
 
@@ -74,25 +124,45 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Security(secu
             token,
             public_key,
             algorithms=[settings.JWT_ALGORITHM],
-            options={"verify_aud": False},  # Multi-service — no fixed audience
+            options={"verify_aud": False},
         )
 
-        # Normalise: ensure user_id is always present (some JWT configs use only `sub`)
         if "user_id" not in payload and "sub" in payload:
             payload["user_id"] = payload["sub"]
 
         return payload
 
     except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired. Please log in again.")
+        raise HTTPException(status_code=401, detail="Token expired.")
     except PyJWTError as exc:
         raise HTTPException(status_code=401, detail=f"Token invalid: {str(exc)}")
 
 
+async def verify_internal_service(
+    x_internal_secret: str = Header(..., alias="X-Internal-Secret")
+) -> bool:
+    """
+    Dependency to verify requests between internal microservices.
+    Requires the X-Internal-Secret header to match settings.
+    """
+    if not settings.INTERNAL_SERVICE_SECRET:
+        logger.error("[Security] INTERNAL_SERVICE_SECRET is not configured!")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Service misconfiguration: Internal secret not set."
+        )
+
+    if x_internal_secret != settings.INTERNAL_SERVICE_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid internal service secret."
+        )
+    return True
+
+
 async def get_token_payload_optional(request: Request) -> Optional[dict]:
     """
-    [SMART] Optional Auth: returns JWT claims if token is present and valid, 
-    otherwise returns None. Does NOT raise 401/403 if header is missing.
+    Optional Auth: returns JWT claims if token is present and valid, otherwise None.
     """
     auth_header = request.headers.get("Authorization")
     if not auth_header:
@@ -104,52 +174,18 @@ async def get_token_payload_optional(request: Request) -> Optional[dict]:
         if scheme.lower() != "bearer":
             return None
             
-        # Re-use verify logic but handle exceptions silently
-        jwks = await get_jwks()
-        if not jwks or "keys" not in jwks:
-            return None
-            
-        header = jwt.get_unverified_header(token)
-        rsa_key = {}
-        for key in jwks["keys"]:
-            if key.get("kid") == header.get("kid"):
-                rsa_key = {k: key[k] for k in ("kty", "kid", "use", "n", "e") if k in key}
-                break
-        
-        if not rsa_key and jwks["keys"]:
-            rsa_key = jwks["keys"][0]
-            
-        if not rsa_key:
-            return None
-
-        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(rsa_key)
-        payload = jwt.decode(
-            token,
-            public_key,
-            algorithms=[settings.JWT_ALGORITHM],
-            options={"verify_aud": False},
-        )
-        if "user_id" not in payload and "sub" in payload:
-            payload["user_id"] = payload["sub"]
-        return payload
+        # Wrap for verify_token
+        creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+        return await verify_token(creds)
     except Exception:
         return None
 
 
-# ---------------------------------------------------------------------------
-# DEPENDENCY HELPERS
-# ---------------------------------------------------------------------------
+# ── Dependency Helpers ───────────────────────────────────────────────────────
 
-async def get_current_user(claims: dict = Depends(verify_token)) -> dict:
-    """
-    Primary dependency — returns the full JWT claims for the authenticated user.
-    fetches user's info like id, email, username, etc. from the JWT claims. Raises 401 if token is invalid.
-    """
+async def get_current_user_claims(claims: dict = Depends(verify_token)) -> dict:
+    """Primary dependency — returns the full JWT claims."""
     return claims
-
-
-# Alias used by all existing endpoints that import `get_current_user_claims`
-get_current_user_claims = get_current_user
 
 async def get_user_id(claims: dict = Depends(verify_token)) -> str:
     """Extract the authenticated user's UUID."""
