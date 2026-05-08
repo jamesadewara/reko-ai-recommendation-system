@@ -38,11 +38,10 @@ The **Reko AI Recommendation System** focuses on:
 ## Project Structure
 
 ```
-reko-ai-recommendation-system/
 ├── app/
 │   ├── main.py                 # FastAPI application & lifespan
 │   ├── core/
-│   │   ├── config.py           # Settings (MongoDB, RabbitMQ, JWT)
+│   │   ├── config.py           # Settings (MongoDB, RabbitMQ, JWT, AI Keys)
 │   │   ├── broker.py           # Taskiq broker (RabbitMQ)
 │   │   ├── connections.py      # WebSocket connection manager
 │   │   ├── security.py         # RS2A, JWKS & internal secret verification
@@ -53,7 +52,11 @@ reko-ai-recommendation-system/
 │   │           ├── chats.py    # REST API for chat management
 │   │           └── websocket.py # Real-time chat handler
 │   ├── documents/
-│   │   └── chat.py             # Beanie/MongoDB documents
+│   │   ├── chat.py             # ChatSession Document
+│   │   ├── user.py             # UserDocument (Style Fingerprint, Taste Profile)
+│   │   ├── temp_model.py       # TempModelDocument (Pre-onboarding profiles)
+│   │   ├── item.py             # ItemDocument (Movies, Food, Products)
+│   │   └── review.py           # ReviewDocument (AI Generated Reviews)
 │   └── tasks/
 │       └── birthday.py         # Birthday event listener
 ├── requirements.txt            # Python dependencies

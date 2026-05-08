@@ -1,12 +1,19 @@
 import json
-import logging
 import asyncio
 import aio_pika
+from loguru import logger
 from app.core.config import settings
-from app.workers.tasks import process_notification_event
+from app.tasks.search_tasks import create_user_profile, deep_search_user
+from app.tasks.analysis_tasks import analyze_user_data
+from app.tasks.review_tasks import generate_review_async
 
-logger = logging.getLogger(__name__)
-
+# Task name to function mapping
+TASK_MAP = {
+    "create_user_profile": create_user_profile,
+    "deep_search_user": deep_search_user,
+    "analyze_user_data": analyze_user_data,
+    "generate_review_async": generate_review_async,
+}
 
 async def on_message(message: aio_pika.IncomingMessage):
     async with message.process():
@@ -14,13 +21,19 @@ async def on_message(message: aio_pika.IncomingMessage):
             body = message.body.decode()
             data = json.loads(body)
 
-            event_type = data.get("event") or message.routing_key
-            payload = data.get("payload") if ("payload" in data and "event" in data) else data
+            # Taskiq protocol or direct JSON
+            task_name = data.get("task_name") or message.routing_key
+            payload = data.get("args", {}) if "task_name" in data else data
 
-            logger.info(f"[RabbitMQ] Received event: {event_type}")
+            logger.info(f"[RabbitMQ] Received task: {task_name}")
 
-            # Enqueue via Taskiq (non-blocking)
-            await process_notification_event.kiq(event_type, payload)
+            if task_name in TASK_MAP:
+                task_func = TASK_MAP[task_name]
+                # Enqueue via Taskiq for execution
+                await task_func.kiq(payload)
+                logger.info(f"[RabbitMQ] Routed {task_name} to Taskiq")
+            else:
+                logger.warning(f"[RabbitMQ] Unknown task: {task_name}")
 
         except Exception as e:
             logger.error(f"[RabbitMQ] Error processing message: {e}")
@@ -33,16 +46,17 @@ async def start_rabbitmq_consumer():
             channel = await connection.channel()
 
             exchange = await channel.declare_exchange(
-                "luxe-events",
+                "reko-events",
                 aio_pika.ExchangeType.TOPIC,
                 durable=True,
             )
 
-            queue = await channel.declare_queue(settings.NOTIFICATION_QUEUE, durable=True)
+            # We can use a specific queue for events or bind to all
+            queue = await channel.declare_queue("reko-event-queue", durable=True)
             await queue.bind(exchange, routing_key="#")
 
             logger.info(
-                f"[RabbitMQ] Consumer started. Listening on 'luxe-events' → queue: {settings.NOTIFICATION_QUEUE}"
+                f"[RabbitMQ] Consumer started. Listening on 'reko-events' → queue: reko-event-queue"
             )
 
             await queue.consume(on_message)

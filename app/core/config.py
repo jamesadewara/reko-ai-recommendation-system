@@ -41,6 +41,30 @@ class Settings(BaseSettings):
         "http://localhost:8001"
     )
 
+    TAVILY_API_KEY: str = Field(
+        default="",
+        description="Tavily API Key for web scraping"
+    )
+    DEEPSEEK_API_KEY: str = Field(
+        default="",
+        description="DeepSeek API Key"
+    )
+    GROQ_API_KEY: str = Field(
+        default="",
+        description="Groq API Key"
+    )
+    LITELLM_MODEL_PRIMARY: str = "deepseek/deepseek-chat"
+    LITELLM_MODEL_FALLBACK: str = "groq/llama3-70b-8192"
+    
+    SPACY_MODEL: str = "en_core_web_md"
+    SENTENCE_TRANSFORMER_MODEL: str = "all-MiniLM-L6-v2"
+    
+    FAISS_INDEX_PATH: str = "./models/faiss.index"
+    LOCAL_STORAGE_PATH: str = "./localstorage"
+    S3_BUCKET: str = "reko-ai-storage"
+    
+    MAX_CORPUS_LENGTH: int = 50000
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

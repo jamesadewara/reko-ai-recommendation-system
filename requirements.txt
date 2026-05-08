@@ -1,13 +1,82 @@
-fastapi==0.110.0
-pydantic==2.6.3
-pydantic-settings==2.2.1
-pydantic_core==2.16.3
+# --- Core API & Async Web ---
+fastapi
+pydantic
+pydantic-settings
+pydantic-core
+uvicorn
+httpx
+websockets
+
+# --- Auth (JWT validation against Esther's service) ---
 PyJWT==2.8.0
-uvicorn==0.27.1
-taskiq[reload]==0.12.2
-taskiq-aio-pika==0.4.0
+cryptography==48.0.0
+
+# --- Database: Beanie (ODM) + PyMongo (sync) ---
 beanie==2.1.0
 pymongo==4.16.0
-httpx==0.27.2
+
+# --- Task Queue: Taskiq + RabbitMQ (aio-pika) ---
+taskiq[reload]==0.12.2
+taskiq-aio-pika==0.4.0
 aio-pika==9.4.3
-cryptography==48.0.0
+
+# --- ML & Deep Learning ---
+torch==2.11.0
+torchvision==0.26.0
+transformers==5.8.0
+accelerate==1.13.0
+sentence-transformers==5.4.1
+
+# --- Vector Search ---
+faiss-cpu==1.13.2          # Use faiss-gpu if deploying on GPU instance
+
+# --- NLP & Linguistic Analysis ---
+spacy==3.8.14
+thinc
+
+# --- LLM Router (DeepSeek / Gemini via OpenAI-compatible API) ---
+litellm==1.83.14
+
+# --- Topic Modeling & Classical ML ---
+gensim==4.4.0
+scikit-learn==1.8.0
+numpy==2.4.4
+pandas==3.0.2
+
+# --- Dataset Loading (for fine-tuning pipelines) ---
+datasets==4.8.5
+
+# --- Web Scraping & Deep Search ---
+tavily-python==0.7.24
+
+# --- Evaluation Metrics ---
+bert-score==0.3.13
+rouge-score==0.1.2
+
+# --- Monitoring & Logging ---
+loguru==0.7.3
+prometheus-client==0.25.0
+sentry-sdk[fastapi]==2.59.0
+tenacity==9.1.4
+
+# --- Utilities ---
+pillow==12.2.0
+typer==0.25.1
+tqdm==4.67.3
+
+# --- Conditional: AWS S3 (ONLY when DEBUG=False) ---
+# boto3==1.35.0
+# botocore==1.35.0
+# ^ Uncomment in production requirements. In dev, settings.DEBUG=True uses localStorage.
+
+# --- Development & Testing ---
+pytest==9.0.3
+pytest-asyncio==1.3.0
+pytest-cov==7.1.0
+black==26.3.1
+isort==8.0.1
+flake8==7.3.0
+mypy==2.0.0
+
+# --- Production Server --- (used as process manager)
+gunicorn==26.0.0

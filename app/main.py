@@ -1,10 +1,11 @@
-import logging
+import sys
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from loguru import logger
 
 from app.core.config import settings
 from app.core.logging import setup_logging
@@ -15,10 +16,19 @@ from app.core.broker import init_broker, shutdown_broker
 setup_logging()
 
 # Import Routers
+# Import Routers
 from app.api.v1.endpoints.chats import router as chats_router
 from app.api.v1.endpoints.websocket import router as ws_router
+from app.api.v1.endpoints.search import router as search_router
+from app.api.v1.endpoints.users import router as users_router
+from app.api.v1.endpoints.reviews import router as reviews_router
+# from app.api.v1.endpoints.items import router as items_router
 
-logger = logging.getLogger(__name__)
+# Import tasks to ensure they are registered
+import app.tasks.birthday
+import app.tasks.search_tasks
+import app.tasks.analysis_tasks
+import app.tasks.review_tasks
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,6 +48,23 @@ async def lifespan(app: FastAPI):
         logger.info("📡 [TaskIQ] Initializing broker...")
         await init_broker()
         logger.info("✅ [TaskIQ] Broker ready.")
+
+        # 3. Load ML Models
+        logger.info("🧠 [ML] Loading spaCy model...")
+        import spacy
+        try:
+            app.state.nlp = spacy.load(settings.SPACY_MODEL)
+            logger.info(f"✅ [ML] spaCy model {settings.SPACY_MODEL} loaded.")
+        except Exception as e:
+            logger.error(f"❌ [ML] Failed to load spaCy model: {e}")
+
+        logger.info("🧠 [ML] Loading SentenceTransformer model...")
+        from sentence_transformers import SentenceTransformer
+        try:
+            app.state.embedding_model = SentenceTransformer(settings.SENTENCE_TRANSFORMER_MODEL)
+            logger.info(f"✅ [ML] SentenceTransformer {settings.SENTENCE_TRANSFORMER_MODEL} loaded.")
+        except Exception as e:
+            logger.error(f"❌ [ML] Failed to load SentenceTransformer model: {e}")
         
         logger.info("✨ [Lifespan] Server ready to handle requests.")
         yield
@@ -82,7 +109,11 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": settings.APP_NAME}
+    return {
+        "status": "ok", 
+        "service": settings.APP_NAME,
+        "services": ["mongodb", "rabbitmq"]
+    }
 
 @app.get("/", include_in_schema=False)
 async def root():
@@ -109,6 +140,10 @@ async def redoc_html():
 # Register API Routers
 app.include_router(chats_router, prefix="/api/v1/chats", tags=["Chats"])
 app.include_router(ws_router, prefix="/api/v1/ws", tags=["WebSocket"])
+app.include_router(search_router, prefix="/api/v1/search", tags=["Deep Search"])
+app.include_router(users_router, prefix="/api/v1/users", tags=["Users"])
+app.include_router(reviews_router, prefix="/api/v1/reviews", tags=["Reviews"])
+# app.include_router(items_router, prefix="/api/v1/items", tags=["Items"])
 
 # Import tasks to ensure they are registered
 import app.tasks.birthday
