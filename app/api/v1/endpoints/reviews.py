@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from loguru import logger
@@ -10,13 +10,20 @@ from app.ml.review_generator import ReviewGenerator
 from app.ml.rating_predictor import RatingPredictor
 from app.ml.bertscore_evaluator import BERTScoreEvaluator
 from app.services.embedding_encoder import encode_text
+from app.schemas.responses import ReviewResponse, ErrorResponse
 
 router = APIRouter()
 
 class ReviewGenerateRequest(BaseModel):
     product: Dict[str, str] # name, category, description
 
-@router.post("/generate", summary="Generate a personalized review for a product")
+@router.post(
+    "/generate", 
+    response_model=ReviewResponse,
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+    summary="Generate personalized review",
+    description="Generates a product review in the user's voice using their style fingerprint and taste profile. It also predicts a rating and evaluates output via BERTScore."
+)
 async def generate_review(
     request: Dict, # Using dict to avoid strict pydantic for the 'product' nested dict in demo
     token_claims: dict = Depends(verify_token)

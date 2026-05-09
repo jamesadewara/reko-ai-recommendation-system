@@ -9,6 +9,8 @@ from app.core.security import verify_token
 from app.documents.user import UserDocument
 from app.services.deep_search import TavilyDeepSearch
 from app.core.broker import broker
+from app.schemas.responses import SearchResponse, ErrorResponse
+
 router = APIRouter()
 
 class DeepSearchRequest(BaseModel):
@@ -21,7 +23,13 @@ class VerifyProfilesRequest(BaseModel):
     user_id: str
     verified_urls: Dict[str, str]
 
-@router.post("/deep", summary="Perform deep web search for a user")
+@router.post(
+    "/deep", 
+    response_model=SearchResponse,
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Perform deep web search for a user",
+    description="Crawls the web to find public information about the user, compiles a corpus, and prepares for NLP analysis."
+)
 async def perform_deep_search(
     payload: DeepSearchRequest,
     token_claims: dict = Depends(verify_token)

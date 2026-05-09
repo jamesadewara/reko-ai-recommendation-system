@@ -40,7 +40,7 @@ async def analyze_user_data(user_id: str):
         user.style_fingerprint = style
         user.taste_profile = taste
         user.interest_embeddings = embedding
-        user.model_version = "v1.0"
+        user.ml_version = "v1.0"
         user.last_trained = datetime.utcnow()
         
         await user.save()

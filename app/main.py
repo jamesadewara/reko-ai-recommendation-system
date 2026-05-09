@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
 from loguru import logger
 
@@ -11,6 +12,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.db.session import init_db
 from app.core.broker import init_broker, shutdown_broker
+from app.core.middleware import RateLimitMiddleware, RequestIDMiddleware
 
 # Initialize logging as soon as possible
 setup_logging()
@@ -22,6 +24,8 @@ from app.api.v1.endpoints.websocket import router as ws_router
 from app.api.v1.endpoints.search import router as search_router
 from app.api.v1.endpoints.users import router as users_router
 from app.api.v1.endpoints.reviews import router as reviews_router
+from app.api.v1.endpoints.recommendations import router as recommendations_router
+from app.api.v1.endpoints.ads import router as ads_router
 # from app.api.v1.endpoints.items import router as items_router
 
 # Import tasks to ensure they are registered
@@ -65,6 +69,14 @@ async def lifespan(app: FastAPI):
             logger.info(f"✅ [ML] SentenceTransformer {settings.SENTENCE_TRANSFORMER_MODEL} loaded.")
         except Exception as e:
             logger.error(f"❌ [ML] Failed to load SentenceTransformer model: {e}")
+            
+        logger.info("🔍 [FAISS] Initializing Vector Search Index...")
+        from app.ml.faiss_manager import get_faiss_index
+        try:
+            await get_faiss_index()
+            logger.info("✅ [FAISS] Vector Search Index ready.")
+        except Exception as e:
+            logger.error(f"❌ [FAISS] Failed to initialize FAISS index: {e}")
         
         logger.info("✨ [Lifespan] Server ready to handle requests.")
         yield
@@ -104,6 +116,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
@@ -143,7 +158,5 @@ app.include_router(ws_router, prefix="/api/v1/ws", tags=["WebSocket"])
 app.include_router(search_router, prefix="/api/v1/search", tags=["Deep Search"])
 app.include_router(users_router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(reviews_router, prefix="/api/v1/reviews", tags=["Reviews"])
-# app.include_router(items_router, prefix="/api/v1/items", tags=["Items"])
-
-# Import tasks to ensure they are registered
-import app.tasks.birthday
+app.include_router(recommendations_router, prefix="/api/v1/recommendations", tags=["Recommendations"])
+app.include_router(ads_router, prefix="/api/v1/ads", tags=["Ads"])

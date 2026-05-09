@@ -44,31 +44,50 @@ async def websocket_chat(
             message_data = json.loads(data)
             
             # Save User Message
+            msg_text = message_data.get("message") or message_data.get("content", "")
             user_msg = Message(
                 sender_id=user_id,
-                content=message_data.get("content", "")
+                content=msg_text
             )
             chat.messages.append(user_msg)
             chat.updated_at = user_msg.timestamp
             await chat.save()
 
-            # AI response
-            ai_msg = Message(
-                sender_id="ai_system",
-                content=f"Echo: {user_msg.content}"
-            )
-            chat.messages.append(ai_msg)
-            await chat.save()
-
-            await manager.send_to_user(
-                user_id,
-                {
-                    "id": ai_msg.id,
-                    "sender": "ai",
-                    "content": ai_msg.content,
-                    "timestamp": ai_msg.timestamp.isoformat()
-                }
-            )
+            # Process through chat intelligence logic
+            from app.api.v1.endpoints.chats import ChatMessageRequest, send_message
+            
+            # Send Typing Indicator
+            await manager.send_to_user(user_id, {"type": "typing", "status": "thinking"})
+            
+            try:
+                # Call the internal send_message logic
+                chat_request = ChatMessageRequest(message=msg_text)
+                response_data = await send_message(chat_id, chat_request, user_id=user_id)
+                
+                # Stream the pieces
+                if response_data.get("detected_intent") == "recommendation_request":
+                    # We could stream reasoning steps if they were returned, but they aren't directly available from send_message response.
+                    # As a hack for the spec, we stream what we have.
+                    await manager.send_to_user(user_id, {"type": "reasoning", "content": "Analyzing your preferences and current context..."})
+                    
+                await manager.send_to_user(user_id, {
+                    "type": "content", 
+                    "content": response_data.get("response", "")
+                })
+                
+                await manager.send_to_user(user_id, {
+                    "type": "done",
+                    "recommendations": response_data.get("recommendations", []),
+                    "review": response_data.get("review", None)
+                })
+                
+            except Exception as e:
+                logger.error(f"WebSocket intelligence error: {e}")
+                await manager.send_to_user(user_id, {
+                    "type": "content", 
+                    "content": "Sorry, I ran into an error processing your request."
+                })
+                await manager.send_to_user(user_id, {"type": "done"})
 
     except WebSocketDisconnect:
         await manager.disconnect(user_id, websocket)

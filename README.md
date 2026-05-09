@@ -1,111 +1,63 @@
-# Reko AI Recommendation System
+# REKO AI — AI-Powered Personalized Recommendation & Review Generation Engine
 
-A high-performance microservice dedicated to product analysis, user preferences, and real-time AI-driven recommendations. This service also manages user chat history and provides a WebSocket-based chat interface.
+## Hackathon: DSN X BCT LLM Agent Challenge
+### Team: Agentic Engineers
 
----
+## What It Does
+Reko AI is an intelligent recommendation and review engine specifically localized for the Nigerian context. It goes beyond simple collaborative filtering by using Tavily to perform deep web searches on users, feeding their digital footprints into an NLP pipeline (spaCy + LiteLLM) to extract a highly personalized "Taste Profile" and "Style Fingerprint". 
 
-## Overview
+The core engine uses these models to generate hyper-personalized product reviews that sound exactly like the user wrote them, and powers a context-aware ReAct recommendation agent that suggests content based on their exact mood, time of day, location (e.g., Lagos, Abuja), and hybrid similar-user interests.
 
-The **Reko AI Recommendation System** focuses on:
-- **AI Recommendations**: Personalized product and content suggestions.
-- **Chat History**: Persistent storage of user conversations in MongoDB.
-- **Real-time Chat**: WebSocket-based interface for low-latency interactions.
-- **Birthday Events**: Responds to user birthdays by providing special celebratory recommendations.
+## Architecture
+- **Auth Service** (FastAPI + PostgreSQL) — Authentication layer
+- **AI Backend** (FastAPI + MongoDB + FAISS) — Core intelligence layer
+- **Frontend** (Next.js) — User interface
 
----
+## Tech Stack
+- **Tavily**: Deep Search Engine
+- **DeepSeek + Groq**: LLM Reasoning & Generation
+- **spaCy en_core_web_md + Custom EntityRuler**: Natural Language Processing
+- **Sentence Transformers + FAISS**: Embeddings & Vector Search
+- **Beanie + PyMongo**: NoSQL Database
+- **Taskiq + RabbitMQ**: Asynchronous Task Queue
 
-## Features
-
-✅ **AI & Recommendations**
-- Personalized recommendation engine integration.
-- Context-aware suggestions based on user behavior.
-- Special "Birthday Mode" recommendations triggered via RabbitMQ.
-
-✅ **Chat System**
-- Persistent chat sessions stored in MongoDB.
-- REST API for chat management (List, Create, Rename, Delete).
-- Real-time WebSocket connection for active chatting.
-- Message history tracking.
-
-✅ **Inter-Service Integration**
-- **Hybrid Token Verification**: Supports both local RSA public keys (RS2A) for high performance and remote JWKS for automatic key rotation.
-- **X-Internal-Secret**: Secure header-based verification for trusted service-to-service calls.
-- **RabbitMQ Integration**: Listens for system-wide events (like birthdays) to trigger background tasks.
-- **Taskiq Orchestration**: Robust background task management using RabbitMQ (No Redis).
-
----
-
-## Project Structure
-
+## Quick Start
+```bash
+git clone <repo>
+cd reko-ai-recommendation-system
+cp .env.example .env
+# Fill in API keys (Tavily, DeepSeek, Groq)
+pip install -r requirements.txt
+python -m spacy download en_core_web_md
+docker-compose up -d mongo rabbitmq
+python scripts/seed_items.py --confirm
+python scripts/build_faiss.py
+uvicorn app.main:app --reload
 ```
-├── app/
-│   ├── main.py                 # FastAPI application & lifespan
-│   ├── core/
-│   │   ├── config.py           # Settings (MongoDB, RabbitMQ, JWT, AI Keys)
-│   │   ├── broker.py           # Taskiq broker (RabbitMQ)
-│   │   ├── connections.py      # WebSocket connection manager
-│   │   ├── security.py         # RS2A, JWKS & internal secret verification
-│   │   └── session.py          # MongoDB (Pymongo 4.16+) initialization
-│   ├── api/
-│   │   └── v1/
-│   │       └── endpoints/
-│   │           ├── chats.py    # REST API for chat management
-│   │           └── websocket.py # Real-time chat handler
-│   ├── documents/
-│   │   ├── chat.py             # ChatSession Document
-│   │   ├── user.py             # UserDocument (Style Fingerprint, Taste Profile)
-│   │   ├── temp_model.py       # TempModelDocument (Pre-onboarding profiles)
-│   │   ├── item.py             # ItemDocument (Movies, Food, Products)
-│   │   └── review.py           # ReviewDocument (AI Generated Reviews)
-│   └── tasks/
-│       └── birthday.py         # Birthday event listener
-├── requirements.txt            # Python dependencies
-├── .env.example                # Configuration template
-└── README.md
-```
-
----
-
-## Installation & Setup
-
-### Prerequisites
-- Python 3.11+
-- MongoDB 6.0+
-- RabbitMQ 3.12+
-
-### Setup
-1. **Clone & Install**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. **Configure**:
-   Copy `.env.example` to `.env` and set your `DATABASE_URL` (MongoDB) and `RABBITMQ_URL`.
-3. **Run**:
-   ```bash
-   uvicorn app.main:app --reload --port 8001
-   ```
-
----
 
 ## API Endpoints
+- `POST /api/v1/search/deep` — Deep search user profiles
+- `POST /api/v1/reviews/generate` — Generate personalized review (Task A)
+- `POST /api/v1/recommendations` — Get recommendations with reasoning (Task B)
+- `POST /api/v1/ads/recommend` — Business ad recommendations
+- `WS /api/v1/ws/chat/{chat_id}` — Real-time streaming chat
 
-### Chat REST API
-- `GET /api/v1/chats/`: List all chat sessions.
-- `POST /api/v1/chats/`: Start a new chat.
-- `PATCH /api/v1/chats/{id}`: Rename a chat.
-- `DELETE /api/v1/chats/{id}`: Delete a chat.
+## Environment Variables
+| Variable | Description |
+|---|---|
+| DATABASE_URL | MongoDB Connection string |
+| RABBITMQ_URL | RabbitMQ Connection string |
+| TAVILY_API_KEY | Tavily deep search API key |
+| DEEPSEEK_API_KEY | Primary LLM API key |
+| GROQ_API_KEY | Fallback LLM API key |
+| LITELLM_MODEL_PRIMARY | e.g. deepseek/deepseek-chat |
 
-### WebSocket
-- `WS /api/v1/ws/chat/{chat_id}?token={JWT}`: Real-time chat connection.
+*(See `.env.example` for the complete list)*
 
----
+## Nigerian Context
+- **EntityRuler** detects: Lagos, Ikeja, Lekki, Surulere, Abuja, Ibadan, Port Harcourt
+- **Nigerian markers**: "na so", "abeg", "omo", "no wahala", "how far"
+- **Content**: Nollywood movies, Afrobeats, Jollof, Suya, Amala
 
-## Background Tasks
-
-This service runs a **Taskiq Worker** listening to RabbitMQ:
-- **`handle_birthday_event`**: Triggered by the Auth System. Prepares birthday-themed recommendations for the user.
-
-To run the worker:
-```bash
-taskiq worker app.core.broker:broker
-```
+## License
+MIT

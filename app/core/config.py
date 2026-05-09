@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "reko-ai-recommendation-system"
     DEBUG: bool = True
 
-    # ── Database (MongoDB via Motor + Beanie) ─────────────────────────────────
+    # ── Database (MongoDB via PyMongo + Beanie) ─────────────────────────────────
     DATABASE_URL: str = Field(
         default="mongodb://localhost:27017",
         description="MongoDB connection URI"
@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     FAISS_INDEX_PATH: str = "./models/faiss.index"
     LOCAL_STORAGE_PATH: str = "./localstorage"
     S3_BUCKET: str = "reko-ai-storage"
+    SUPABASE_URL: str = Field(default="", description="Supabase project URL")
+    SUPABASE_KEY: str = Field(default="", description="Supabase project API key")
+    
+    TEMP_MODEL_CLEANUP_CRON: str = Field(
+        default="0 0 * * *", 
+        description="Cron expression for cleaning up temp models"
+    )
     
     MAX_CORPUS_LENGTH: int = 50000
 

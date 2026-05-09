@@ -22,9 +22,7 @@ aio-pika==9.4.3
 
 # --- ML & Deep Learning ---
 torch==2.11.0
-torchvision==0.26.0
 transformers==5.8.0
-accelerate==1.13.0
 sentence-transformers==5.4.1
 
 # --- Vector Search ---
@@ -32,37 +30,26 @@ faiss-cpu==1.13.2          # Use faiss-gpu if deploying on GPU instance
 
 # --- NLP & Linguistic Analysis ---
 spacy==3.8.14
-thinc
 
-# --- LLM Router (DeepSeek / Gemini via OpenAI-compatible API) ---
+# --- LLM Router (DeepSeek / Gemini) ---
 litellm==1.83.14
+openai
 
 # --- Topic Modeling & Classical ML ---
-gensim==4.4.0
-scikit-learn==1.8.0
 numpy==2.4.4
-pandas==3.0.2
-
-# --- Dataset Loading (for fine-tuning pipelines) ---
-datasets==4.8.5
 
 # --- Web Scraping & Deep Search ---
 tavily-python==0.7.24
 
 # --- Evaluation Metrics ---
 bert-score==0.3.13
-rouge-score==0.1.2
 
 # --- Monitoring & Logging ---
 loguru==0.7.3
-prometheus-client==0.25.0
-sentry-sdk[fastapi]==2.59.0
 tenacity==9.1.4
 
 # --- Utilities ---
-pillow==12.2.0
-typer==0.25.1
-tqdm==4.67.3
+typer==0.21.1
 
 # --- Conditional: AWS S3 (ONLY when DEBUG=False) ---
 # boto3==1.35.0

@@ -48,7 +48,7 @@ async def main():
         print(f"Nigerian Context Detected: {len(nigerian_data) > 0}")
         
     except Exception as e:
-        print(f"❌ Test failed: {e}")
+        print(f"Test failed: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

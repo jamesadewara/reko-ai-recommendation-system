@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.tasks.search_tasks import create_user_profile, deep_search_user
 from app.tasks.analysis_tasks import analyze_user_data
 from app.tasks.review_tasks import generate_review_async
+from app.tasks.temp_model_tasks import cleanup_expired_temp_models
 
 # Task name to function mapping
 TASK_MAP = {
@@ -13,6 +14,7 @@ TASK_MAP = {
     "deep_search_user": deep_search_user,
     "analyze_user_data": analyze_user_data,
     "generate_review_async": generate_review_async,
+    "cleanup_expired_temp_models": cleanup_expired_temp_models,
 }
 
 async def on_message(message: aio_pika.IncomingMessage):

@@ -26,7 +26,7 @@ async def get_my_model(token_claims: dict = Depends(verify_token)):
         "style_fingerprint": user.style_fingerprint,
         "taste_profile": user.taste_profile,
         "interest_embeddings_length": len(user.interest_embeddings),
-        "model_version": user.model_version,
+        "model_version": user.ml_version,
         "last_trained": user.last_trained,
         "corpus_length": len(user.raw_corpus) if user.raw_corpus else 0
     }

@@ -2,6 +2,7 @@ from loguru import logger
 from app.core.broker import broker
 from app.documents.user import UserDocument
 from app.services.deep_search import TavilyDeepSearch
+from datetime import datetime
 
 @broker.task(task_name="deep_search_user")
 async def deep_search_user(user_id: str):
@@ -49,7 +50,15 @@ async def create_user_profile(payload: dict):
     auth_user_id = payload.get("auth_user_id")
     email = payload.get("email")
     name = payload.get("name")
+    dob_str = payload.get("date_of_birth")
     
+    date_of_birth = None
+    if dob_str:
+        try:
+            date_of_birth = datetime.strptime(dob_str, "%Y-%m-%d").date()
+        except ValueError:
+            logger.warning(f"[Tasks] Invalid date_of_birth format: {dob_str}")
+
     if not email:
         logger.error("[Tasks] Cannot create UserDocument: email missing in payload")
         return
@@ -58,13 +67,16 @@ async def create_user_profile(payload: dict):
     existing_user = await UserDocument.find_one(UserDocument.email == email)
     if existing_user:
         logger.info(f"[Tasks] UserDocument already exists for email {email}")
+        existing_user.date_of_birth = date_of_birth
+        await existing_user.save()
         user_id = str(existing_user.id)
     else:
         # Create new UserDocument
         new_user = UserDocument(
             email=email,
             name=name,
-            auth_user_id=auth_user_id
+            auth_user_id=auth_user_id,
+            date_of_birth=date_of_birth
         )
         await new_user.insert()
         user_id = str(new_user.id)
