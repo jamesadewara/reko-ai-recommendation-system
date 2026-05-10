@@ -49,12 +49,12 @@ class Settings(BaseSettings):
         default="",
         description="DeepSeek API Key"
     )
-    GROQ_API_KEY: str = Field(
+    OPENROUTER_API_KEY: str = Field(
         default="",
-        description="Groq API Key"
+        description="OpenRouter API Key"
     )
     LITELLM_MODEL_PRIMARY: str = "deepseek/deepseek-chat"
-    LITELLM_MODEL_FALLBACK: str = "groq/llama3-70b-8192"
+    LITELLM_MODEL_FALLBACK: str = "openrouter/google/gemini-2.0-flash-exp:free"
     
     SPACY_MODEL: str = "en_core_web_md"
     SENTENCE_TRANSFORMER_MODEL: str = "all-MiniLM-L6-v2"
@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     TEMP_MODEL_CLEANUP_CRON: str = Field(
         default="0 0 * * *", 
         description="Cron expression for cleaning up temp models"
+    )
+
+    HF_TOKEN: str = Field(
+        default="",
+        description="Hugging Face API Token"
     )
     
     MAX_CORPUS_LENGTH: int = 50000

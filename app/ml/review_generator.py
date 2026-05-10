@@ -19,29 +19,36 @@ class ReviewGenerator:
         Calls the primary model with a creative temperature,
         falling back to the fallback model on failure.
         """
+        # Determine API key for primary model
+        primary_key = settings.DEEPSEEK_API_KEY
+        if settings.LITELLM_MODEL_PRIMARY.startswith("openrouter/"):
+            primary_key = settings.OPENROUTER_API_KEY
+
         try:
             response = completion(
                 model=settings.LITELLM_MODEL_PRIMARY,
                 messages=messages,
+                api_key=primary_key,
                 temperature=0.7,
                 max_tokens=250
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content or ""
         except Exception as e:
             logger.warning(f"[ReviewGenerator] Primary model failed, falling back to {settings.LITELLM_MODEL_FALLBACK}: {e}")
             response = completion(
                 model=settings.LITELLM_MODEL_FALLBACK,
                 messages=messages,
+                api_key=settings.OPENROUTER_API_KEY,
                 temperature=0.7,
                 max_tokens=250
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content or ""
 
     async def generate(self, user_id: str, product: dict) -> dict:
         """
         Generate a hyper-personalized review using the user's real style and taste.
         """
-        user = await UserDocument.get(user_id)
+        user = await UserDocument.find_by_id_or_uuid(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
             

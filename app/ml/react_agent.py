@@ -46,7 +46,7 @@ class ReActAgent:
             # Location match boost
             user_locations = []
             if user.style_fingerprint:
-                user_locations = user.style_fingerprint.nigerian_locations
+                user_locations = user.style_fingerprint.favorite_entities
             item_locations = metadata.get("location_tags", [])
             if any(loc in item_locations for loc in user_locations):
                 base_score += 0.1

@@ -9,18 +9,23 @@ from app.core.security import verify_token
 from app.documents.user import UserDocument
 from app.services.deep_search import TavilyDeepSearch
 from app.core.broker import broker
+from taskiq_aio_pika import AioPikaBroker
+from taskiq import AsyncKicker
+from app.core.config import settings
+
+# Secondary broker pointing to the Auth System's queue for cross-service tasks
+auth_broker = AioPikaBroker(
+    settings.RABBITMQ_URL,
+    queue_name="auth_queue"
+)
 from app.schemas.responses import SearchResponse, ErrorResponse
 
 router = APIRouter()
 
 class DeepSearchRequest(BaseModel):
-    user_id: str
-    name: str
-    email: str
-    handles: Optional[Dict] = None
+    handles: Optional[Dict[str, str]] = None
 
 class VerifyProfilesRequest(BaseModel):
-    user_id: str
     verified_urls: Dict[str, str]
 
 @router.post(
@@ -38,19 +43,17 @@ async def perform_deep_search(
     Perform multi-platform deep search using Tavily, compile corpus,
     and update the user's document in MongoDB.
     """
-    # 1. Verify user exists
-    user = await UserDocument.get(payload.user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
+    # 1. Get/Create User from token
+    user = await UserDocument.get_or_create_from_token(token_claims)
+    
     # 2. Initialize Search Service
     search_service = TavilyDeepSearch()
 
     # 3. Perform Searches
     try:
         search_results = await search_service.search_user(
-            name=payload.name,
-            email=payload.email,
+            name=user.name or "Anonymous User",
+            email=user.email,
             handles=payload.handles
         )
         
@@ -61,18 +64,6 @@ async def perform_deep_search(
         # 5. Update UserDocument
         user.deep_search_results = search_results
         user.raw_corpus = corpus
-        
-        # Map candidates to social_profiles (unverified)
-        for platform, urls in candidates.items():
-            if urls:
-                # Store the top candidate if not already set or verified
-                current_profile = user.social_profiles.get(platform, {})
-                if not current_profile.get("verified"):
-                    user.social_profiles[platform] = {
-                        "url": urls[0]["url"],
-                        "verified": False,
-                        "last_scraped": None
-                    }
         
         await user.save()
 
@@ -99,24 +90,34 @@ async def verify_profiles(
     """
     Confirm which social media URLs belong to the user and trigger analysis.
     """
-    user = await UserDocument.get(payload.user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = await UserDocument.get_or_create_from_token(token_claims)
 
     profiles_linked = []
+    # 2. Sync with Auth System via RabbitMQ
+    user_uuid = token_claims.get("user_id") or token_claims.get("sub")
+    
+    auth_sync_count = 0
     for platform, url in payload.verified_urls.items():
-        user.social_profiles[platform] = {
-            "url": url,
-            "verified": True,
-            "last_scraped": datetime.utcnow()
-        }
+        # Async Sync (RabbitMQ to Auth System)
+        try:
+            # We use AsyncKicker to call the task by name across services
+            await AsyncKicker(task_name="sync_user_socials", broker=auth_broker).kiq(
+                user_id=user_uuid, 
+                platform=platform, 
+                url=url
+            )
+            auth_sync_count += 1
+        except Exception as e:
+            logger.error(f"[SearchAPI] Failed to queue social sync for {platform}: {e}")
+        
         profiles_linked.append(platform)
 
     await user.save()
+    logger.info(f"[SearchAPI] Profiles verified for {user.id}. Queued {auth_sync_count} sync tasks to RabbitMQ.")
 
     # Trigger background Taskiq task for analysis
     try:
-        await broker.kick("analyze_user_data", user_id=str(user.id))
+        await AsyncKicker(task_name="analyze_user_data", broker=broker).kiq(user_id=str(user.id))
         logger.info(f"[SearchAPI] Analysis task triggered for user {user.id}")
     except Exception as e:
         logger.error(f"[SearchAPI] Failed to trigger analysis task: {e}")

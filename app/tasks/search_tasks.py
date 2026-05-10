@@ -84,3 +84,20 @@ async def create_user_profile(payload: dict):
 
     # Trigger deep search
     await broker.kick("deep_search_user", user_id=user_id)
+
+@broker.task(task_name="send_otp_email")
+async def send_otp_email_stub(*args, **kwargs):
+    """
+    Stub to prevent 'task not found' warnings if auth tasks 
+    accidentally end up in the recommendation queue.
+    """
+    logger.warning("[Recommendation] Received 'send_otp_email' task. This belongs to the Auth system. Ignoring.")
+    return
+
+@broker.task(task_name="send_password_reset_email")
+async def send_password_reset_email_stub(*args, **kwargs):
+    """
+    Stub for password reset emails.
+    """
+    logger.warning("[Recommendation] Received 'send_password_reset_email' task. Ignoring.")
+    return

@@ -29,10 +29,10 @@ from app.api.v1.endpoints.ads import router as ads_router
 # from app.api.v1.endpoints.items import router as items_router
 
 # Import tasks to ensure they are registered
-import app.tasks.birthday
 import app.tasks.search_tasks
 import app.tasks.analysis_tasks
 import app.tasks.review_tasks
+import app.tasks.temp_model_tasks
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -63,9 +63,10 @@ async def lifespan(app: FastAPI):
             logger.error(f"❌ [ML] Failed to load spaCy model: {e}")
 
         logger.info("🧠 [ML] Loading SentenceTransformer model...")
-        from sentence_transformers import SentenceTransformer
+        from app.services.embedding_encoder import get_encoder
         try:
-            app.state.embedding_model = SentenceTransformer(settings.SENTENCE_TRANSFORMER_MODEL)
+            # This populates the singleton in the embedding_encoder module
+            app.state.embedding_model = get_encoder()
             logger.info(f"✅ [ML] SentenceTransformer {settings.SENTENCE_TRANSFORMER_MODEL} loaded.")
         except Exception as e:
             logger.error(f"❌ [ML] Failed to load SentenceTransformer model: {e}")
@@ -99,7 +100,7 @@ async def lifespan(app: FastAPI):
             
         logger.info("🏁 [Lifespan] Cleanup complete.")
 
-
+ 
 app = FastAPI(
     title=settings.APP_NAME,
     description="Reko AI Recommendation System - Handles product analysis, user preferences, and real-time AI chat.",
@@ -160,3 +161,13 @@ app.include_router(users_router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(reviews_router, prefix="/api/v1/reviews", tags=["Reviews"])
 app.include_router(recommendations_router, prefix="/api/v1/recommendations", tags=["Recommendations"])
 app.include_router(ads_router, prefix="/api/v1/ads", tags=["Ads"])
+
+# Serve Static Files
+from fastapi.staticfiles import StaticFiles
+import os
+
+static_path = "app/static"
+if not os.path.exists(static_path):
+    os.makedirs(static_path, exist_ok=True)
+
+app.mount("/static", StaticFiles(directory=static_path), name="static")

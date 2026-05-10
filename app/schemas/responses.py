@@ -10,7 +10,8 @@ class ReviewResponse(BaseModel):
     bertscore_f1: Optional[float] = Field(None, example=0.87)
     confidence: Optional[float] = Field(None, example=0.92)
     style_snapshot: Optional[Dict[str, Any]] = Field(None)
-    used_nigerian_markers: Optional[bool] = Field(None, example=True)
+    image_url: Optional[str] = Field(None, example="https://images.example.com/product-123.jpg")
+    used_nigerian_markers: Optional[List[str]] = Field(None, example=["omo", "abeg"])
     sentence_count: Optional[int] = Field(None, example=5)
 
 class RecommendationItem(BaseModel):
@@ -21,9 +22,19 @@ class RecommendationItem(BaseModel):
 
 class RecommendationResponse(BaseModel):
     items: List[RecommendationItem]
-    context_used: Dict[str, Any] = Field(..., example={"mood": "nostalgic", "location": "Lagos"})
+    reasoning_chain: List[str] = Field(default_factory=list)
+    context_used: Dict[str, Any] = Field(..., alias="context")
+    similar_users_found: int = 0
+    privacy_safe: bool = True
+
+    class Config:
+        populate_by_name = True
 
 class SearchResponse(BaseModel):
-    status: str = Field(..., example="success")
-    corpus_length: int = Field(..., example=15000)
-    entities_found: List[str] = Field(..., example=["Lagos", "Tech", "Music"])
+    user_id: str
+    status: str = "success"
+    corpus_length: int = 0
+    corpus_preview: Optional[str] = None
+    candidates: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    entities_found: List[str] = Field(default_factory=list)
+    nigerian_context_detected: bool = False

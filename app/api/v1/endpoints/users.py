@@ -12,13 +12,7 @@ async def get_my_model(token_claims: dict = Depends(verify_token)):
     Returns the style fingerprint, taste profile, and model status 
     for the currently authenticated user.
     """
-    email = token_claims.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="Email not found in token")
-
-    user = await UserDocument.find_one(UserDocument.email == email)
-    if not user:
-        raise HTTPException(status_code=404, detail="User profile not found")
+    user = await UserDocument.get_or_create_from_token(token_claims)
 
     return {
         "name": user.name,
@@ -36,10 +30,7 @@ async def trigger_my_analysis(token_claims: dict = Depends(verify_token)):
     """
     Manually kick off the background analysis task for the current user.
     """
-    email = token_claims.get("email")
-    user = await UserDocument.find_one(UserDocument.email == email)
-    if not user:
-        raise HTTPException(status_code=404, detail="User profile not found")
+    user = await UserDocument.get_or_create_from_token(token_claims)
 
     if not user.raw_corpus:
         raise HTTPException(status_code=400, detail="No search data found. Please run deep search first.")

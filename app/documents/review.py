@@ -10,6 +10,7 @@ class ReviewDocument(Document):
     generated_text: str
     predicted_rating: float
     confidence: float
+    image_url: Optional[str] = None
     bertscore_f1: Optional[float] = None
     style_snapshot: Dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)

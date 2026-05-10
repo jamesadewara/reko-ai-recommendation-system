@@ -1,6 +1,10 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
+from loguru import logger
+from beanie import PydanticObjectId
+from taskiq import AsyncKicker
 from app.documents.chat import ChatSession
+from app.core.broker import broker
 from app.core.security import get_user_id
 from pydantic import BaseModel
 
@@ -44,6 +48,9 @@ async def update_chat_name(
     user_id: str = Depends(get_user_id)
 ):
     """Update the name of a chat session."""
+    if not PydanticObjectId.is_valid(chat_id):
+        raise HTTPException(status_code=400, detail="Invalid Chat ID format")
+        
     chat = await ChatSession.get(chat_id)
     if not chat or chat.user_id != user_id:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -55,6 +62,9 @@ async def update_chat_name(
 @router.delete("/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_chat(chat_id: str, user_id: str = Depends(get_user_id)):
     """Delete a chat session."""
+    if not PydanticObjectId.is_valid(chat_id):
+        raise HTTPException(status_code=400, detail="Invalid Chat ID format")
+        
     chat = await ChatSession.get(chat_id)
     if not chat or chat.user_id != user_id:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -73,6 +83,9 @@ async def send_message(
     payload: ChatMessageRequest, 
     user_id: str = Depends(get_user_id)
 ):
+    if not PydanticObjectId.is_valid(chat_id):
+        raise HTTPException(status_code=400, detail="Invalid Chat ID format")
+        
     chat = await ChatSession.get(chat_id)
     if not chat or chat.user_id != user_id:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -99,7 +112,16 @@ async def send_message(
     extracted_links = []
     
     from app.documents.user import UserDocument
-    user = await UserDocument.get(user_id)
+    user = await UserDocument.get_or_create_from_token(token_claims)
+    
+    # --- 1. GATHER CONTEXT DATA ---
+    context_notes = []
+    if user:
+        interests = ", ".join(user.taste_profile.interests[:10]) if user.taste_profile.interests else "general"
+        context_notes.append(f"User Name: {user.name}")
+        context_notes.append(f"User Interests: {interests}")
+        if user.taste_profile.nigerian_context:
+            context_notes.append("User is from Nigeria. Use a friendly, natural Nigerian tone (Pidgin/Slang like 'Omo', 'How far', 'Correct' is encouraged).")
 
     if detected_intent == "recommendation_request":
         from app.api.v1.endpoints.recommendations import get_recommendations, RecommendationRequest, ContextInput
@@ -107,63 +129,81 @@ async def send_message(
         if user:
             claims = {"email": user.email}
             rec_result = await get_recommendations(req, token_claims=claims)
-            items = rec_result.get("items", [])
-            response_text = "Here are some recommendations for you:\n\n" + "\n\n".join([f"{i+1}. {item['name']} — {item['reasoning']}" for i, item in enumerate(items[:3])])
-            recommendations = items[:5]
+            recommendations = rec_result.get("items", [])
+            items_str = "\n".join([f"- {i['name']}: {i['reasoning']}" for i in recommendations[:5]])
+            context_notes.append(f"SYSTEM ACTION: I found these recommendations for the user:\n{items_str}\n\nPlease present them naturally.")
             
     elif detected_intent == "review_request":
         from app.ml.review_generator import ReviewGenerator
-        product = {"name": "User Specified Item", "category": "movies", "description": "From chat"}
+        # Heuristic: try to extract product name from message or use default
+        product_name = payload.message.replace("review", "").replace("write a", "").strip() or "this item"
+        product = {"name": product_name, "category": "general", "description": "Specified by user in chat"}
         try:
             gen_result = await ReviewGenerator().generate(user_id, product)
-            response_text = f"Here's a review in your style:\n\n{gen_result['review_text']}\n\n⭐ 4.5/5"
             review = gen_result
+            context_notes.append(f"SYSTEM ACTION: I generated this review for '{product_name}' in the user's style:\n\"{gen_result['review_text']}\"\n\nPlease share it with them.")
         except Exception as e:
-            response_text = f"Failed to generate review: {str(e)}"
+            logger.error(f"Review gen failed: {e}")
             
     elif detected_intent in ["share_social_link", "onboarding_social"]:
         urls = re.findall(r"(https?://\S+|github\.com/\S+|linkedin\.com/\S+|twitter\.com/\S+|x\.com/\S+)", msg_lower)
         extracted_links = urls
         if user:
-            for url in urls:
-                user.social_profiles[url] = {"url": url, "verified": False}
-            await user.save()
+            # Note: We no longer store socials locally in UserDocument.
+            # They are handled by the Auth System.
             try:
-                from app.core.broker import broker
-                await broker.kick("deep_search_user", user_id=str(user.id))
-            except Exception:
-                pass
-        response_text = "Thanks! I'll analyze your profiles and learn your taste. This may take a moment."
+                # Start deep search based on the links found in chat
+                await AsyncKicker(task_name="deep_search_user", broker=broker).kiq(
+                    user_id=str(user.id), 
+                    extra_handles=urls
+                )
+                context_notes.append("SYSTEM ACTION: I have detected social links and started a deep search. Tell the user I'm analyzing their digital footprint.")
+            except Exception as e:
+                logger.error(f"[ChatAPI] Failed to kick deep search: {e}")
+
+    # --- 2. COMPOSE AI BRAIN (LLM) ---
+    try:
+        from litellm import acompletion
+        from app.core.config import settings
         
-    elif detected_intent == "greeting":
-        if user and user.taste_profile and user.taste_profile.interests:
-            response_text = f"How far {user.name}! Ready to discover something you'll love? I know you're into {user.taste_profile.interests[0]} these days."
+        # Build System Prompt
+        sys_prompt = "You are Reko AI, a sophisticated personal lifestyle assistant and recommendation expert. "
+        sys_prompt += "Your goal is to help users find what they love. Be conversational, intelligent, and proactive. "
+        if context_notes:
+            sys_prompt += "\n\nCONTEXT ABOUT THIS SESSION:\n" + "\n".join(context_notes)
+
+        # Build Message History (Last 10)
+        messages = [{"role": "system", "content": sys_prompt}]
+        for msg in chat.messages[-10:]:
+            role = "user" if msg.sender_id != "ai_system" else "assistant"
+            messages.append({"role": role, "content": msg.content})
+        
+        # Add current message
+        messages.append({"role": "user", "content": payload.message})
+ 
+        # Determine API key for primary model
+        primary_key = settings.DEEPSEEK_API_KEY
+        if settings.LITELLM_MODEL_PRIMARY.startswith("openrouter/"):
+            primary_key = settings.OPENROUTER_API_KEY
+
+        # Call LLM
+        res = await acompletion(
+            model=settings.LITELLM_MODEL_PRIMARY,
+            messages=messages,
+            api_key=primary_key,
+            fallbacks=[
+                {"model": settings.LITELLM_MODEL_FALLBACK, "api_key": settings.OPENROUTER_API_KEY}
+            ]
+        ) 
+        response_text = res.choices[0].message.content
+        
+    except Exception as e:
+        logger.error(f"Chat LLM failed: {e}")
+        # Fallback to a semi-intelligent default based on intent if LLM crashes
+        if detected_intent == "recommendation_request" and recommendations:
+            response_text = f"Here are some top picks for you: {recommendations[0]['name']}. Would you like more details?"
         else:
-            response_text = f"Hi {user.name if user else 'there'}! I'm your personal recommendation agent. Let's discover what you love."
-            
-    else:
-        # general chat fallback
-        try:
-            from litellm import acompletion
-            from app.core.config import settings
-            sys_prompt = "You are Reko AI, a friendly recommendation assistant. Keep answers brief."
-            if user and user.taste_profile:
-                sys_prompt += f" The user likes {', '.join(user.taste_profile.interests)}."
-                if user.taste_profile.nigerian_context:
-                    sys_prompt += " Use a friendly Nigerian tone."
-            messages = [{"role": "system", "content": sys_prompt}]
-            for msg in chat.messages[-5:]:
-                messages.append({"role": "user" if msg.sender_id != "ai_system" else "assistant", "content": msg.content})
-            messages.append({"role": "user", "content": payload.message})
-            res = await acompletion(
-                model=settings.LITELLM_MODEL_PRIMARY,
-                messages=messages,
-                api_key=settings.DEEPSEEK_API_KEY,
-                fallbacks=[{"model": settings.LITELLM_MODEL_FALLBACK, "api_key": settings.GROQ_API_KEY}]
-            )
-            response_text = res.choices[0].message.content
-        except Exception as e:
-            response_text = "I'm here to help you find things you love. Ask me for a recommendation or a review!"
+            response_text = "I'm processing your request. How can I help you discover something new today?"
 
     from app.documents.chat import Message
     import datetime

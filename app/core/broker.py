@@ -18,15 +18,16 @@ async def worker_startup(state):
     """
     Initialize connections when worker starts.
     """
-    # If there's a DB verification needed for the recommendation system, add it here
-    logger.info("[TaskIQ] Worker started.")
+    from app.db.session import init_db
+    from app.core.config import settings
+    await init_db(settings.DATABASE_URL, settings.DATABASE_NAME)
+    logger.info("[TaskIQ] Worker started and DB initialized.")
 
 async def init_broker():
     """
     Connect broker during app startup.
     """
-    if not broker.is_lazy_startup:
-        await broker.startup()
+    await broker.startup()
     logger.info("[TaskIQ] Broker initialized.")
 
 async def shutdown_broker():
@@ -38,7 +39,7 @@ async def shutdown_broker():
 
 # Import tasks to ensure they are registered with the broker
 # for discovery by the worker process.
-import app.tasks.birthday
 import app.tasks.search_tasks
 import app.tasks.analysis_tasks
 import app.tasks.review_tasks
+import app.tasks.temp_model_tasks

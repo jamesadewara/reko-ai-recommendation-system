@@ -27,7 +27,7 @@ class TasteProfile(BaseModel):
 class UserDocument(Document):
     email: Indexed(str, unique=True)
     name: Optional[str] = None
-    auth_user_id: Optional[str] = None
+    auth_user_id: Indexed(str, unique=True)
 
     # Date of birth — synced from the auth system on profile creation.
     # Used to inject birthday context into the recommendation engine on that day.
@@ -36,8 +36,6 @@ class UserDocument(Document):
     # If False, the hybrid matcher is skipped entirely for this user.
     # Users control this via their settings in the dashboard.
     allow_hybrid_recommendations: bool = True
-
-    social_profiles: Dict[str, Dict] = Field(default_factory=dict)
 
     style_fingerprint: StyleFingerprint = Field(default_factory=StyleFingerprint)
     taste_profile: TasteProfile = Field(default_factory=TasteProfile)
@@ -55,6 +53,46 @@ class UserDocument(Document):
 
     class Settings:
         name = "users"
+
+    @classmethod
+    async def find_by_id_or_uuid(cls, user_id: str) -> Optional["UserDocument"]:
+        """
+        Robust lookup: 
+        1. Try as MongoDB PydanticObjectId
+        2. Try as auth_user_id (UUID string from auth system)
+        """
+        from beanie import PydanticObjectId
+        
+        # 1. Try as ObjectId
+        if PydanticObjectId.is_valid(user_id):
+            user = await cls.get(user_id)
+            if user:
+                return user
+
+        # 2. Try as auth_user_id
+        return await cls.find_one(cls.auth_user_id == user_id)
+
+    @classmethod
+    async def get_or_create_from_token(cls, claims: dict) -> "UserDocument":
+        """
+        Retrieves user from DB or creates a stub if missing using token claims.
+        """
+        user_id = claims.get("user_id") or claims.get("sub")
+        email = claims.get("email")
+        name = claims.get("name")
+        
+        user = await cls.find_by_id_or_uuid(user_id)
+        if user:
+            return user
+            
+        # Create stub if missing
+        user = cls(
+            auth_user_id=user_id,
+            email=email or f"unknown_{user_id}@reko.ai",
+            name=name or "Anonymous User"
+        )
+        await user.insert()
+        return user
 
     def is_birthday_today(self) -> bool:
         """Returns True if today matches the user's month and day of birth."""

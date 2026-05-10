@@ -32,10 +32,7 @@ async def generate_review(
     Generates a hyper-personalized product review using the user's style fingerprint,
     predicts a rating, and evaluates quality via BERTScore.
     """
-    email = token_claims.get("email")
-    user = await UserDocument.find_one(UserDocument.email == email)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = await UserDocument.get_or_create_from_token(token_claims)
 
     if not user.taste_profile:
         raise HTTPException(status_code=400, detail="User model not ready. Run analysis first.")
@@ -60,7 +57,10 @@ async def generate_review(
     bert_result = evaluator.evaluate(review_text, user.raw_corpus or "")
     f1_score = bert_result["bertscore_f1"]
 
-    # 4. Save to Database
+    # 4. Handle Image
+    product_image = product.get("image_url")
+
+    # 5. Save to Database
     review_doc = ReviewDocument(
         user_id=str(user.id),
         product_name=product["name"],
@@ -68,8 +68,9 @@ async def generate_review(
         generated_text=review_text,
         predicted_rating=rating,
         confidence=f1_score,
+        image_url=product_image,
         bertscore_f1=f1_score,
-        style_snapshot=user.style_fingerprint
+        style_snapshot=user.style_fingerprint.model_dump()
     )
     await review_doc.insert()
 
@@ -78,7 +79,8 @@ async def generate_review(
         "predicted_rating": rating,
         "confidence": f1_score,
         "bertscore_f1": f1_score,
-        "style_snapshot": user.style_fingerprint,
+        "image_url": product_image,
+        "style_snapshot": user.style_fingerprint.model_dump(),
         "used_nigerian_markers": gen_result["used_nigerian_markers"],
         "sentence_count": gen_result["sentence_count"]
     }
@@ -91,8 +93,7 @@ async def get_user_style(
     if user_id:
         user = await UserDocument.get(user_id)
     else:
-        email = token_claims.get("email")
-        user = await UserDocument.find_one(UserDocument.email == email)
+        user = await UserDocument.get_or_create_from_token(token_claims)
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -101,10 +102,7 @@ async def get_user_style(
 
 @router.get("/history", summary="Get user's generated review history")
 async def get_review_history(token_claims: dict = Depends(verify_token)):
-    email = token_claims.get("email")
-    user = await UserDocument.find_one(UserDocument.email == email)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = await UserDocument.get_or_create_from_token(token_claims)
 
     reviews = await ReviewDocument.find(ReviewDocument.user_id == str(user.id)).to_list()
     return reviews

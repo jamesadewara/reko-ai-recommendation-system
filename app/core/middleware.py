@@ -16,6 +16,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.GENERAL_LIMIT = 100
 
     async def dispatch(self, request: Request, call_next):
+        # Skip rate limiting for WebSockets as BaseHTTPMiddleware doesn't support them well
+        if request.scope["type"] == "websocket":
+            return await call_next(request)
+
         # Only enforce rate limits in production
         if settings.DEBUG:
             return await call_next(request)
@@ -47,6 +51,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # Skip for WebSockets
+        if request.scope["type"] == "websocket":
+            return await call_next(request)
+            
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
         # In a real app, you would inject this into a contextvar for loguru to pick up
         response = await call_next(request)

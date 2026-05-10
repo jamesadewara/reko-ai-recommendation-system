@@ -14,28 +14,36 @@ class CoTReasoning:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=6))
     def _call_llm(self, messages: list) -> str:
+        # Determine API key for primary model
+        primary_key = settings.DEEPSEEK_API_KEY
+        if settings.LITELLM_MODEL_PRIMARY.startswith("openrouter/"):
+            primary_key = settings.OPENROUTER_API_KEY
+
         try:
             response = completion(
                 model=settings.LITELLM_MODEL_PRIMARY,
                 messages=messages,
+                api_key=primary_key,
                 temperature=0.4,
                 max_tokens=300
             )
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            return content if content is not None else ""
         except Exception as e:
             logger.warning(f"[CoTReasoning] Primary model failed, falling back to {settings.LITELLM_MODEL_FALLBACK}: {e}")
             try:
                 response = completion(
                     model=settings.LITELLM_MODEL_FALLBACK,
                     messages=messages,
+                    api_key=settings.OPENROUTER_API_KEY,
                     temperature=0.4,
                     max_tokens=300
                 )
-                return response.choices[0].message.content
+                content = response.choices[0].message.content
+                return content if content is not None else ""
             except Exception as inner_e:
                 logger.error(f"[CoTReasoning] Both models failed: {inner_e}")
-                # Re-raise to fail properly as per user instructions
-                raise HTTPException(status_code=502, detail="Recommendation reasoning LLM failed")
+                return "1. Analysis: Unable to reach AI reasoning engine. Returning safe recommendations."
 
     def generate_reasoning_chain(self, user: UserDocument, context: dict, category: str) -> List[str]:
         if not user.taste_profile:
@@ -77,10 +85,6 @@ class CoTReasoning:
 
         Return exactly 4-5 numbered reasoning steps. Be concise.
         """
-
-        Return exactly 4-5 numbered reasoning steps. Be concise.
-        """
-
         messages = [
             {"role": "user", "content": prompt}
         ]

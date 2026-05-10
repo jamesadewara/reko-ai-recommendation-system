@@ -46,21 +46,10 @@ class TavilyDeepSearch:
 
     async def search_user(self, name: str, email: str, handles: dict = None) -> dict:
         email_prefix = email.split('@')[0]
+        handles = handles or {}
         
-        # Define tasks for parallel execution
+        # Define base tasks for parallel execution
         tasks = {
-            "github": self._async_tavily_search(
-                query=f"{name} {email_prefix} site:github.com",
-                max_results=5
-            ),
-            "linkedin": self._async_tavily_search(
-                query=f"{name} linkedin profile",
-                max_results=5
-            ),
-            "twitter": self._async_tavily_search(
-                query=f"{name} twitter x posts recent",
-                max_results=5
-            ),
             "web": self._async_tavily_search(
                 query=f"{name} {email_prefix} interests opinions reviews blog",
                 max_results=10
@@ -71,6 +60,13 @@ class TavilyDeepSearch:
                 max_results=5
             )
         }
+
+        # Add dynamic handles as specific search tasks
+        for label, url in handles.items():
+            tasks[label] = self._async_tavily_search(
+                query=url,
+                max_results=5
+            )
 
         # Run in parallel
         try:
@@ -97,10 +93,9 @@ class TavilyDeepSearch:
 
     def compile_corpus(self, search_results: dict) -> str:
         corpus_parts = []
-        platforms = ["github", "linkedin", "twitter", "web", "nigerian"]
-        
-        for platform in platforms:
-            data = search_results.get(platform, {})
+        # Process all keys dynamically (web, nigerian, and any custom handles)
+        for platform, data in search_results.items():
+            if platform == "searched_at": continue
             # Add the direct answer if available
             if data.get("answer"):
                 corpus_parts.append(data["answer"])
@@ -121,10 +116,12 @@ class TavilyDeepSearch:
 
     def extract_candidate_urls(self, search_results: dict) -> dict:
         candidates = {}
-        platforms = ["github", "linkedin", "twitter"]
         
-        for platform in platforms:
-            data = search_results.get(platform, {})
+        # Process all search result keys dynamically
+        for platform, data in search_results.items():
+            if platform in ["web", "nigerian", "searched_at"]:
+                continue
+            
             results = data.get("results", [])
             
             # Sort by score descending and take top 3

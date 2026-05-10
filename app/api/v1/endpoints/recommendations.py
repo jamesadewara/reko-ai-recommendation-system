@@ -37,10 +37,7 @@ async def get_recommendations(
     request: RecommendationRequest,
     token_claims: dict = Depends(verify_token)
 ):
-    email = token_claims.get("email")
-    user = await UserDocument.find_one(UserDocument.email == email)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = await UserDocument.get_or_create_from_token(token_claims)
         
     if not user.taste_profile:
         raise HTTPException(status_code=400, detail="User model not ready. Run analysis first.")
@@ -136,20 +133,27 @@ async def get_recommendations(
 
 
 class HybridRequest(BaseModel):
-    user_id: str
     k_similar_users: int = 5
     category: str
 
 @router.post("/hybrid", summary="Get recommendations based on similar users")
 async def get_hybrid_recommendations(request: HybridRequest, token_claims: dict = Depends(verify_token)):
+    user = await UserDocument.get_or_create_from_token(token_claims)
+    user_id_str = str(user.id)
+    
     hybrid_matcher = HybridMatcher()
-    similar_users = await hybrid_matcher.find_similar_users(request.user_id)
+    similar_users = await hybrid_matcher.find_similar_users(user_id_str)
     
     if not similar_users:
-        return {"items": [], "similar_user_overlap": 0, "privacy_safe": True}
+        return {
+            "items": [], 
+            "similar_user_overlap": 0, 
+            "privacy_safe": True,
+            "message": "We're still learning your taste. No similar users found yet."
+        }
         
     similar_users = similar_users[:request.k_similar_users]
-    cross_items = await hybrid_matcher.get_cross_recommendations(request.user_id, similar_users, request.category)
+    cross_items = await hybrid_matcher.get_cross_recommendations(user_id_str, similar_users, request.category)
     
     items_out = []
     for item_id in cross_items[:10]:

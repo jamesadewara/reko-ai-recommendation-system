@@ -1,6 +1,7 @@
 import logging
 import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from beanie import PydanticObjectId
 from app.documents.chat import ChatSession, Message
 from app.core.security import verify_token
 from app.core.connections import manager
@@ -20,20 +21,30 @@ async def websocket_chat(
     """
     try:
         # 1. Verify Token
-        # Note: WebSockets often pass tokens via query params because headers can be tricky
         from fastapi.security import HTTPAuthorizationCredentials
-        creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-        payload = await verify_token(creds)
-        user_id = payload.get("user_id") or payload.get("sub")
-        
-        # 2. Connect
+        try:
+            creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+            payload = await verify_token(creds)
+            user_id = payload.get("user_id") or payload.get("sub")
+        except Exception as auth_err:
+            logger.warning(f"WebSocket auth failed: {auth_err}")
+            await websocket.close(code=4001) # Unauthorized
+            return
+
+        # 2. Accept and Connect
+        await websocket.accept()
         await manager.connect(user_id, websocket)
         
-        # 3. Load Chat Session
+        # 3. Validate ID and Load Chat Session
+        if not PydanticObjectId.is_valid(chat_id):
+            await websocket.close(code=4000, reason="Invalid Chat ID format")
+            await manager.disconnect(user_id, websocket)
+            return
+
         chat = await ChatSession.get(chat_id)
         if not chat or chat.user_id != user_id:
-            await manager.disconnect(user_id, websocket)
             await websocket.close(code=4004) # Not Found
+            await manager.disconnect(user_id, websocket)
             return
 
         logger.info(f"User {user_id} joined chat {chat_id}")

@@ -31,6 +31,9 @@ async def generate_review_async(user_id: str, product: dict):
         rating = RatingPredictor().predict_with_sentiment(user.interest_embeddings, product_emb, review_text)
         bert_result = BERTScoreEvaluator().evaluate(review_text, user.raw_corpus or "")
         
+        # Handle Image
+        product_image = product.get("image_url")
+
         # Save
         review_doc = ReviewDocument(
             user_id=user_id,
@@ -39,6 +42,7 @@ async def generate_review_async(user_id: str, product: dict):
             generated_text=review_text,
             predicted_rating=rating,
             confidence=bert_result["bertscore_f1"],
+            image_url=product_image,
             bertscore_f1=bert_result["bertscore_f1"],
             style_snapshot=user.style_fingerprint
         )
