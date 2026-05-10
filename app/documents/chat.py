@@ -10,6 +10,9 @@ class Message(BaseModel):
     content: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     is_read: bool = False
+    has_analysis: bool = False
+    has_simulator: bool = False
+    metadata: Optional[dict] = None
 
 class ChatSession(Document):
     user_id: Indexed(str)

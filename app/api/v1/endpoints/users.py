@@ -41,3 +41,20 @@ async def trigger_my_analysis(token_claims: dict = Depends(verify_token)):
         "message": "Analysis started", 
         "user_id": str(user.id)
     }
+
+@router.post("/discovery", summary="Start pre-analysis for a prospective user")
+async def start_discovery(email: str):
+    """
+    Triggers the Deep Search engine to build a 'Temp Model' for an email address.
+    Used for waitlists or landing page 'magic' onboarding.
+    """
+    from app.services.temp_model import TempModelService
+    service = TempModelService()
+    temp = await service.create_from_email(email)
+    
+    return {
+        "status": "discovery_started",
+        "email": email,
+        "is_ready": temp.interest_embeddings and len(temp.interest_embeddings) > 0,
+        "message": "Reko is learning your style from your public digital footprint."
+    }

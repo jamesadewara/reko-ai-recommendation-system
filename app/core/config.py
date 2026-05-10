@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     
     MAX_CORPUS_LENGTH: int = 50000
 
+    SUPPORT_EMAIL: str = "jamesadewara1@gmail.com"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -99,9 +99,9 @@ class ReviewGenerator:
         """
 
         user_prompt = f"""
-        Product: {product['name']}
-        Category: {product['category']}
-        Description: {product['description']}
+        Product: {product.get('name', 'Unknown Product')}
+        Category: {product.get('category', 'Unknown Category')}
+        Description: {product.get('description', 'No description provided.')}
         """
         if search_context:
             user_prompt += f"\nOnline Context for Reference:\n{search_context}\n"

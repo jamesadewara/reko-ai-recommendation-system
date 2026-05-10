@@ -6,6 +6,7 @@ pydantic-core
 uvicorn
 httpx
 websockets
+sse-starlette
 
 # --- Auth (JWT validation against Esther's service) ---
 PyJWT==2.8.0

@@ -151,11 +151,12 @@ async def get_recommendations(
         item_out = {
             "item_id": str(item.get("id", item.get("_id", "unknown"))),
             "name": item.get("name", "Unknown Item"),
+            "category": item.get("category", "products"),
+            "image": item.get("metadata", {}).get("image_url") or "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=400",
             "score": item.get("score", 0.0),
-            "reasoning": reason
+            "reasoning": reason,
+            "meta": ", ".join(item.get("metadata", {}).get("genre", [])) or item.get("category", "")
         }
-        if "metadata" in item and "url" in item["metadata"]:
-            item_out["url"] = item["metadata"]["url"]
             
         top_10[i] = item_out
 

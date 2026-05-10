@@ -187,6 +187,37 @@ async def get_current_user_claims(claims: dict = Depends(verify_token)) -> dict:
     """Primary dependency — returns the full JWT claims."""
     return claims
 
+async def get_user_id_from_anywhere(
+    request: Request,
+    token: Optional[str] = None
+) -> str:
+    """
+    Hybrid dependency that extracts user_id from Authorization header OR 'token' query param.
+    Useful for SSE (EventSource) and WebSockets where headers are limited.
+    """
+    # 1. Try Header
+    auth_header = request.headers.get("Authorization")
+    if auth_header:
+        from fastapi.security.utils import get_authorization_scheme_param
+        scheme, creds_token = get_authorization_scheme_param(auth_header)
+        if scheme.lower() == "bearer":
+            token = creds_token
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token required via header or query param."
+        )
+
+    # Wrap for verify_token
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    payload = await verify_token(creds)
+    
+    uid = payload.get("user_id") or payload.get("sub")
+    if not uid:
+        raise HTTPException(status_code=400, detail="Missing user identity in token.")
+    return str(uid)
+
 async def get_user_id(claims: dict = Depends(verify_token)) -> str:
     """Extract the authenticated user's UUID."""
     uid = claims.get("user_id") or claims.get("sub")

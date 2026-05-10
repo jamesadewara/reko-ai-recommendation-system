@@ -24,17 +24,29 @@ class TasteProfile(BaseModel):
     favorite_phrases: List[str] = []
 
 
+class VerifiedProfile(BaseModel):
+    """
+    Represents a social profile that was confirmed (or auto-detected) as
+    belonging to the user. Tracks historical confidence so the scheduler can
+    remove stale/invalid profiles and trigger re-training.
+    """
+    platform: str
+    url: str
+    title: str = ""
+    confidence: float        # 0.0 – 1.0
+    confirmed_by_user: bool  # True = user clicked Yes; False = auto-detected
+    added_at: datetime = Field(default_factory=datetime.utcnow)
+    last_verified_at: datetime = Field(default_factory=datetime.utcnow)
+    # Keeps a short history of confidence scores so we can detect drift
+    confidence_history: List[float] = Field(default_factory=list)
+
+
 class UserDocument(Document):
     email: Indexed(str, unique=True)
     name: Optional[str] = None
     auth_user_id: Indexed(str, unique=True)
 
-    # Date of birth — synced from the auth system on profile creation.
-    # Used to inject birthday context into the recommendation engine on that day.
     date_of_birth: Optional[date] = None
-
-    # If False, the hybrid matcher is skipped entirely for this user.
-    # Users control this via their settings in the dashboard.
     allow_hybrid_recommendations: bool = True
 
     style_fingerprint: StyleFingerprint = Field(default_factory=StyleFingerprint)
@@ -44,8 +56,14 @@ class UserDocument(Document):
     raw_corpus: str = ""
     deep_search_results: Dict = Field(default_factory=dict)
 
+    # ── Verified profiles ────────────────────────────────────────────────────
+    # Populated on /verify and refreshed by the scheduled task.
+    # Only profiles above CONFIDENCE_THRESHOLD are kept here.
+    verified_profiles: List[VerifiedProfile] = Field(default_factory=list)
+
     ml_version: str = "1.0"
     last_trained: Optional[datetime] = None
+    last_profile_refresh: Optional[datetime] = None
     temp_model_id: Optional[str] = None
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -111,6 +129,17 @@ class UserDocument(Document):
             name=name or "Anonymous User",
             date_of_birth=dob
         )
+        
+        # Check for TempModel discovery data
+        from app.documents.temp_model import TempModelDocument
+        temp = await TempModelDocument.find_one(TempModelDocument.email == user.email)
+        if temp:
+            user.taste_profile.interests = temp.interests
+            user.interest_embeddings = temp.interest_embeddings
+            user.temp_model_id = str(temp.id)
+            # Cleanup temp model after mapping
+            await temp.delete()
+            
         await user.insert()
         return user
 
