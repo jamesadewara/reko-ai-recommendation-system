@@ -13,6 +13,7 @@ from app.services.embedding_encoder import encode_text
 from app.ml.faiss_manager import get_faiss_index
 from app.ml.react_agent import ReActAgent
 from app.ml.hybrid_matcher import HybridMatcher
+from app.services.deep_search import MultiSearchEngine
 from app.schemas.responses import RecommendationResponse, ErrorResponse
 
 router = APIRouter()
@@ -103,6 +104,30 @@ async def get_recommendations(
             if str(c.get("id")) in cross_items:
                 c["score"] += 0.1
 
+    # 5b. Online Search Augmentation
+    try:
+        search_engine = MultiSearchEngine()
+        online_query = f"top {category} recommendations 2026 {parsed_context.get('mood', '')}"
+        if user.taste_profile.interests:
+            online_query += " " + " ".join(user.taste_profile.interests[:2])
+            
+        web_data = await search_engine.search(query=online_query, max_results=3)
+        for res in web_data.get("results", []):
+            item_dict = {
+                "id": f"web_{hash(res.get('url', ''))}",
+                "name": res.get("title", "Online Pick"),
+                "category": category,
+                "score": res.get("score", 0.8),
+                "metadata": {
+                    "source": "web",
+                    "url": res.get("url"),
+                    "description": res.get("content", "")
+                }
+            }
+            candidates.append(item_dict)
+    except Exception as e:
+        logger.warning(f"[Recommendations] Failed to augment with online search: {e}")
+
     # 6. ReAct Agent Filtering
     filtered = ReActAgent().filter_and_rank(candidates, parsed_context, user)
     
@@ -120,8 +145,19 @@ async def get_recommendations(
             reason += " Top Nigerian pick for you."
         if parsed_context["mood"] == "tired" and metadata.get("duration_minutes", 0) and metadata.get("duration_minutes", 0) < 120:
             reason += " Short and easy for your tired mood."
+        if metadata.get("source") == "web":
+            reason = f"Trending Online: {metadata.get('description', '')}"
+
+        item_out = {
+            "item_id": str(item.get("id", item.get("_id", "unknown"))),
+            "name": item.get("name", "Unknown Item"),
+            "score": item.get("score", 0.0),
+            "reasoning": reason
+        }
+        if "metadata" in item and "url" in item["metadata"]:
+            item_out["url"] = item["metadata"]["url"]
             
-        item["reasoning"] = reason
+        top_10[i] = item_out
 
     return {
         "items": top_10,

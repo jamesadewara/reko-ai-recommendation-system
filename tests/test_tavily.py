@@ -5,50 +5,72 @@ import sys
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.services.deep_search import TavilyDeepSearch
+from app.services.deep_search import MultiSearchEngine
 from app.core.config import settings
 
 async def main():
-    print("Starting Tavily Deep Search Test...")
-    
-    if not settings.TAVILY_API_KEY:
-        print("Error: TAVILY_API_KEY is not set in environment or .env file.")
-        return
+    print("=" * 60)
+    print("  MultiSearchEngine Integration Test (Tavily + Serper)")
+    print("=" * 60)
 
-    search_service = TavilyDeepSearch()
-    
-    # Test Data
+    search_service = MultiSearchEngine()
+
+    # ── Test 1: Unified search() combining both APIs ──────────────
+    print("\n[TEST 1] Unified search() — combining Tavily + Serper")
+    try:
+        result = await search_service.search("best Nigerian Afrobeats albums 2025", max_results=5)
+        sources = [r.get("url") for r in result.get("results", [])]
+        print(f"  Results received: {len(result['results'])}")
+        if result.get("answer"):
+            print(f"  Direct answer: {result['answer'][:120]}...")
+        for url in sources[:3]:
+            print(f"     -> {url}")
+    except Exception as e:
+        print(f"  FAIL — Unified search failed: {e}")
+
+    # ── Test 2: Serper standalone ──────────────────────────────────
+    print("\n[TEST 2] Serper standalone search")
+    if not settings.SERPER_API_KEY:
+        print("  SKIP — SERPER_API_KEY not set")
+    else:
+        try:
+            result = await search_service._async_serper_search("top Nollywood movies 2025", max_results=5)
+            print(f"  Serper results: {len(result['results'])}")
+            for r in result["results"][:3]:
+                print(f"     -> {r['title']} | {r['url']}")
+        except Exception as e:
+            print(f"  FAIL — Serper search failed: {e}")
+
+    # ── Test 3: search_user() with social handles ──────────────────
+    print("\n[TEST 3] search_user() with social handles")
     test_name = "Esther Agbi"
     test_email = "esther.agbi@example.com"
-    
-    print(f"Searching for: {test_name} ({test_email})...")
-    
+    test_handles = {
+        "linkedin": "linkedin.com/in/esther-agbi",
+        "github": "github.com/esther-agbi"
+    }
     try:
-        # 1. Perform Search
-        results = await search_service.search_user(test_name, test_email)
-        print("Search complete.")
-        
-        # 2. Extract Candidates
+        results = await search_service.search_user(test_name, test_email, handles=test_handles)
+        print(f"  search_user complete — keys: {list(results.keys())}")
+
         candidates = search_service.extract_candidate_urls(results)
-        print("\nCandidate Profiles:")
+        print(f"  Candidate profiles for: {list(candidates.keys())}")
         for platform, urls in candidates.items():
-            print(f"  - {platform.capitalize()}:")
             for item in urls:
-                print(f"    * {item['title']} ({item['url']}) [Score: {item['confidence']}]")
-        
-        # 3. Compile Corpus
+                print(f"     [{platform}] {item['title']} ({item['url']})")
+
         corpus = search_service.compile_corpus(results)
-        print(f"\nCorpus compiled (Length: {len(corpus)} chars)")
-        print("-" * 50)
-        print(corpus[:500] + "..." if len(corpus) > 500 else corpus)
-        print("-" * 50)
-        
-        # 4. Nigerian Context
-        nigerian_data = results.get("nigerian", {}).get("results", [])
-        print(f"Nigerian Context Detected: {len(nigerian_data) > 0}")
-        
+        print(f"  Corpus length: {len(corpus)} chars")
+        print(f"  Preview: {corpus[:200]}...")
+
+        nigerian_hits = results.get("nigerian", {}).get("results", [])
+        print(f"  Nigerian context results: {len(nigerian_hits)}")
     except Exception as e:
-        print(f"Test failed: {e}")
+        print(f"  FAIL — search_user failed: {e}")
+
+    print("\n" + "=" * 60)
+    print("  All tests complete.")
+    print("=" * 60)
 
 if __name__ == "__main__":
     asyncio.run(main())

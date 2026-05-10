@@ -44,7 +44,7 @@ class ReviewGenerator:
             )
             return response.choices[0].message.content or ""
 
-    async def generate(self, user_id: str, product: dict) -> dict:
+    async def generate(self, user_id: str, product: dict, search_context: str = None) -> dict:
         """
         Generate a hyper-personalized review using the user's real style and taste.
         """
@@ -102,9 +102,11 @@ class ReviewGenerator:
         Product: {product['name']}
         Category: {product['category']}
         Description: {product['description']}
-        
-        Your review:
         """
+        if search_context:
+            user_prompt += f"\nOnline Context for Reference:\n{search_context}\n"
+            
+        user_prompt += "\nYour review:\n"
 
         messages = [
             {"role": "system", "content": system_prompt},

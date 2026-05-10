@@ -7,7 +7,7 @@ from loguru import logger
 
 from app.core.security import verify_token
 from app.documents.user import UserDocument
-from app.services.deep_search import TavilyDeepSearch
+from app.services.deep_search import MultiSearchEngine
 from app.core.broker import broker
 from taskiq.kicker import AsyncKicker
 from app.core.config import settings
@@ -42,7 +42,7 @@ async def perform_deep_search(
     user = await UserDocument.get_or_create_from_token(token_claims)
     
     # 2. Initialize Search Service
-    search_service = TavilyDeepSearch()
+    search_service = MultiSearchEngine()
 
     # 3. Perform Searches
     try:

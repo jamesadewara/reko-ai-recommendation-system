@@ -45,6 +45,9 @@ class Settings(BaseSettings):
         default="",
         description="Tavily API Key for web scraping"
     )
+    SERPER_API_KEY: str = Field(default="", 
+    description="")
+
     DEEPSEEK_API_KEY: str = Field(
         default="",
         description="DeepSeek API Key"

@@ -112,7 +112,7 @@ async def send_message(
     extracted_links = []
     
     from app.documents.user import UserDocument
-    user = await UserDocument.get_or_create_from_token(token_claims)
+    user = await UserDocument.find_by_id_or_uuid(user_id)
     
     # --- 1. GATHER CONTEXT DATA ---
     context_notes = []
@@ -122,6 +122,21 @@ async def send_message(
         context_notes.append(f"User Interests: {interests}")
         if user.taste_profile.nigerian_context:
             context_notes.append("User is from Nigeria. Use a friendly, natural Nigerian tone (Pidgin/Slang like 'Omo', 'How far', 'Correct' is encouraged).")
+
+    # --- 1.5. LIVE WEB SEARCH ---
+    try:
+        from app.services.deep_search import MultiSearchEngine
+        search_engine = MultiSearchEngine()
+        web_data = await search_engine.search(query=payload.message, max_results=3)
+        if web_data.get("results"):
+            context_notes.append("LIVE WEB SEARCH CONTEXT FOR THE USER'S MESSAGE:")
+            if web_data.get("answer"):
+                context_notes.append(f"Direct Quick Answer: {web_data['answer']}")
+            for res in web_data["results"]:
+                context_notes.append(f"- {res.get('title')}: {res.get('content')} (Source: {res.get('url')})")
+    except Exception as e:
+        import logging
+        logging.warning(f"[Chats] Web search context failed: {e}")
 
     if detected_intent == "recommendation_request":
         from app.api.v1.endpoints.recommendations import get_recommendations, RecommendationRequest, ContextInput
@@ -139,7 +154,8 @@ async def send_message(
         product_name = payload.message.replace("review", "").replace("write a", "").strip() or "this item"
         product = {"name": product_name, "category": "general", "description": "Specified by user in chat"}
         try:
-            gen_result = await ReviewGenerator().generate(user_id, product)
+            search_context = "\n".join([c for c in context_notes if "LIVE WEB SEARCH" in c or c.startswith("-") or c.startswith("Direct")])
+            gen_result = await ReviewGenerator().generate(user_id, product, search_context=search_context)
             review = gen_result
             context_notes.append(f"SYSTEM ACTION: I generated this review for '{product_name}' in the user's style:\n\"{gen_result['review_text']}\"\n\nPlease share it with them.")
         except Exception as e:

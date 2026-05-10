@@ -3,7 +3,7 @@ from typing import Optional
 from loguru import logger
 from app.documents.temp_model import TempModelDocument
 from app.documents.user import UserDocument
-from app.services.deep_search import TavilyDeepSearch
+from app.services.deep_search import MultiSearchEngine
 from app.services.style_extractor import extract_style_fingerprint
 from app.services.taste_analyzer import TasteAnalyzer
 from app.services.embedding_encoder import build_user_embedding
@@ -23,8 +23,8 @@ class TempModelService:
         logger.info(f"[TempModel] Creating new temp model for {email}")
         name = email.split("@")[0]
         
-        # 1. Tavily Search
-        search_service = TavilyDeepSearch()
+        # 1. MultiSearchEngine Search
+        search_service = MultiSearchEngine()
         try:
             search_results = await search_service.search_user(name=name, email=email)
             corpus = search_service.compile_corpus(search_results)

@@ -1,7 +1,7 @@
 from loguru import logger
 from app.core.broker import broker
 from app.documents.user import UserDocument
-from app.services.deep_search import TavilyDeepSearch
+from app.services.deep_search import MultiSearchEngine
 from datetime import datetime
 
 @broker.task(task_name="deep_search_user")
@@ -16,7 +16,7 @@ async def deep_search_user(user_id: str):
         logger.error(f"[Tasks] User {user_id} not found for deep search")
         return
 
-    search_service = TavilyDeepSearch()
+    search_service = MultiSearchEngine()
     
     try:
         # Perform search
