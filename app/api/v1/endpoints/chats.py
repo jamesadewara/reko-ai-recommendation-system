@@ -2,7 +2,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 from beanie import PydanticObjectId
-from taskiq import AsyncKicker
+from taskiq.kicker import AsyncKicker
 from app.documents.chat import ChatSession
 from app.core.broker import broker
 from app.core.security import get_user_id
@@ -153,7 +153,7 @@ async def send_message(
             # They are handled by the Auth System.
             try:
                 # Start deep search based on the links found in chat
-                await AsyncKicker(task_name="deep_search_user", broker=broker).kiq(
+                await AsyncKicker(task_name="deep_search_user", broker=broker, labels={}).kiq(
                     user_id=str(user.id), 
                     extra_handles=urls
                 )

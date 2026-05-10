@@ -77,19 +77,39 @@ class UserDocument(Document):
         """
         Retrieves user from DB or creates a stub if missing using token claims.
         """
+        from datetime import datetime
+        
         user_id = claims.get("user_id") or claims.get("sub")
         email = claims.get("email")
         name = claims.get("name")
+        dob_str = claims.get("date_of_birth")
         
+        dob = None
+        if dob_str:
+            try:
+                dob = datetime.fromisoformat(dob_str).date()
+            except ValueError:
+                pass
+                
         user = await cls.find_by_id_or_uuid(user_id)
         if user:
+            updated = False
+            if name and user.name != name:
+                user.name = name
+                updated = True
+            if dob and user.date_of_birth != dob:
+                user.date_of_birth = dob
+                updated = True
+            if updated:
+                await user.save()
             return user
             
         # Create stub if missing
         user = cls(
             auth_user_id=user_id,
             email=email or f"unknown_{user_id}@reko.ai",
-            name=name or "Anonymous User"
+            name=name or "Anonymous User",
+            date_of_birth=dob
         )
         await user.insert()
         return user
