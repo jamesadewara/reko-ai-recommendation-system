@@ -200,13 +200,22 @@ async def create_user_profile(payload: dict):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STUB TASKS (auth system tasks that land in the wrong queue)
+# GLOBAL: DAILY BATCH REFRESH
 # ─────────────────────────────────────────────────────────────────────────────
 
-@broker.task(task_name="send_otp_email")
-async def send_otp_email_stub(*args, **kwargs):
-    logger.warning("[Recommendation] Received 'send_otp_email' — belongs to Auth system. Ignoring.")
-
-@broker.task(task_name="send_password_reset_email")
-async def send_password_reset_email_stub(*args, **kwargs):
-    logger.warning("[Recommendation] Received 'send_password_reset_email' — ignoring.")
+@broker.task(task_name="global_daily_refresh")
+async def global_daily_refresh():
+    """
+    Finds all active users and triggers a profile refresh for each.
+    This is intended to be called by the scheduler using USER_REFRESH_CRON.
+    """
+    logger.info("[GlobalRefresh] Starting daily batch refresh for all users...")
+    
+    users = await UserDocument.find_all().to_list()
+    count = 0
+    for user in users:
+        # Trigger refresh for each user
+        await broker.kick("refresh_social_profiles", user_id=str(user.auth_user_id))
+        count += 1
+        
+    logger.info(f"✅ [GlobalRefresh] Dispatched refresh tasks for {count} users.")

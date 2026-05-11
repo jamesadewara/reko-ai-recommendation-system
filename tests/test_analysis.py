@@ -62,7 +62,7 @@ async def main():
         }
     else:
         analyzer = TasteAnalyzer()
-        taste = analyzer.analyze(user.raw_corpus)
+        taste = await analyzer.analyze(user.raw_corpus)
         print(f"Interests: {taste.get('interests')}")
         print(f"Traits: {taste.get('personality_traits')}")
         print(f"Nigerian Context: {taste.get('nigerian_context')}")

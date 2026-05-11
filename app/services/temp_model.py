@@ -37,7 +37,7 @@ class TempModelService:
         # 2. Extract style & taste
         try:
             style = extract_style_fingerprint(mini_corpus)
-            taste = TasteAnalyzer().analyze(mini_corpus)
+            taste = await TasteAnalyzer().analyze(mini_corpus)
             embedding = build_user_embedding(taste, style)
             interests = taste.get("interests", []) if isinstance(taste, dict) else []
         except Exception as e:

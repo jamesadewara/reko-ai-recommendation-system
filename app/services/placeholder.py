@@ -61,20 +61,16 @@ async def get_personalized_placeholder(user: Optional[UserDocument], mode: str =
     options = category.get(time_context, category["afternoon"])
     
     # 1. Semantic Matching (If user has embeddings)
+    placeholder = ""
     if user and user.interest_embeddings and len(user.interest_embeddings) > 0:
         try:
             encoder = get_encoder()
             user_vec = np.array(user.interest_embeddings)
-            
-            # Encode options
             option_vecs = encoder.encode(options)
-            
-            # Calculate cosine similarity manually (dot product / (norm1 * norm2))
-            # Since they are likely normalized by the encoder, dot product is enough
             similarities = np.dot(option_vecs, user_vec)
             best_idx = np.argmax(similarities)
             placeholder = options[best_idx]
-        except Exception as e:
+        except Exception:
             placeholder = random.choice(options)
     else:
         placeholder = random.choice(options)
@@ -83,18 +79,21 @@ async def get_personalized_placeholder(user: Optional[UserDocument], mode: str =
     if user:
         name = user.name.split()[0] if user.name else ""
         if name:
-            placeholder = placeholder.replace("Morning.", f"Morning {name}.")
-            placeholder = placeholder.replace("Afternoon.", f"Afternoon {name}.")
-            placeholder = placeholder.replace("Evening.", f"Evening {name}.")
+            # Case-insensitive replacement for common starters
+            for prefix in ["Morning", "Afternoon", "Evening"]:
+                if placeholder.startswith(prefix):
+                    placeholder = placeholder.replace(prefix, f"{prefix} {name}", 1)
             
-        # Add interest context if available (Keep it very short)
+        # Add interest context (Ensure no double punctuation)
         if user.taste_profile.interests:
             interest = random.choice(user.taste_profile.interests)
+            placeholder = placeholder.rstrip(".?! ")
             placeholder += f" ({interest}?)"
 
-        # Add Nigerian flavor
+        # Add Nigerian flavor (Ensure spacing and no double punctuation)
         if user.taste_profile.nigerian_context and user.style_fingerprint.nigerian_markers:
             marker = random.choice(user.style_fingerprint.nigerian_markers)
+            placeholder = placeholder.rstrip(".?! ")
             placeholder += f" {marker}!"
 
-    return placeholder
+    return placeholder.strip()

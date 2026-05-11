@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from app.core.security import verify_token
-from app.documents.user import UserDocument
+from app.documents.user import UserDocument, HybridToggleRequest
 from app.core.broker import broker
 router = APIRouter()
 
@@ -22,7 +22,8 @@ async def get_my_model(token_claims: dict = Depends(verify_token)):
         "interest_embeddings_length": len(user.interest_embeddings),
         "model_version": user.ml_version,
         "last_trained": user.last_trained,
-        "corpus_length": len(user.raw_corpus) if user.raw_corpus else 0
+        "corpus_length": len(user.raw_corpus) if user.raw_corpus else 0,
+        "allow_hybrid_recommendations": user.allow_hybrid_recommendations
     }
 
 @router.post("/me/analyze", summary="Trigger manual analysis of user data")
@@ -57,4 +58,19 @@ async def start_discovery(email: str):
         "email": email,
         "is_ready": temp.interest_embeddings and len(temp.interest_embeddings) > 0,
         "message": "Reko is learning your style from your public digital footprint."
+    }
+
+@router.put("/me/hybrid-toggle", summary="Toggle hybrid recommendation mode")
+async def toggle_hybrid_mode(payload: HybridToggleRequest, token_claims: dict = Depends(verify_token)):
+    """
+    Enable or disable the hybrid recommendation system for the current user.
+    When disabled, recommendations will only use the user's own data.
+    """
+    user = await UserDocument.get_or_create_from_token(token_claims)
+    user.allow_hybrid_recommendations = payload.enabled
+    await user.save()
+    
+    return {
+        "status": "success",
+        "hybrid_enabled": user.allow_hybrid_recommendations
     }

@@ -72,6 +72,11 @@ class Settings(BaseSettings):
         default="0 0 * * *", 
         description="Cron expression for cleaning up temp models"
     )
+    
+    USER_REFRESH_CRON: str = Field(
+        default="0 1 * * *", 
+        description="Cron expression for daily user profile refresh (Retraining)"
+    )
 
     HF_TOKEN: str = Field(
         default="",

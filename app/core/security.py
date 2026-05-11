@@ -86,6 +86,14 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Security(secu
             # Normalise user identity
             if "user_id" not in payload and "sub" in payload:
                 payload["user_id"] = payload["sub"]
+
+            # Proactively sync/create user in MongoDB
+            from app.documents.user import UserDocument
+            try:
+                await UserDocument.get_or_create_from_token(payload)
+            except Exception as e:
+                logger.warning(f"[Security] Failed to sync user from token: {e}")
+
             return payload
         except ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token expired.")
@@ -129,6 +137,13 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Security(secu
 
         if "user_id" not in payload and "sub" in payload:
             payload["user_id"] = payload["sub"]
+
+        # Proactively sync/create user in MongoDB
+        from app.documents.user import UserDocument
+        try:
+            await UserDocument.get_or_create_from_token(payload)
+        except Exception as e:
+            logger.warning(f"[Security] Failed to sync user from token (JWKS path): {e}")
 
         return payload
 

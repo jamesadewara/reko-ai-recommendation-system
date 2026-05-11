@@ -30,7 +30,7 @@ async def analyze_user_data(user_id: str):
         
         # Step 2: Analyze taste (LLM)
         logger.info(f"[Analysis] Analyzing taste and personality for {user.name}...")
-        taste = TasteAnalyzer().analyze(user.raw_corpus)
+        taste = await TasteAnalyzer().analyze(user.raw_corpus)
         
         # Step 3: Build embedding (SentenceTransformer)
         logger.info(f"[Analysis] Building vector embedding for {user.name}...")

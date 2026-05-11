@@ -24,6 +24,10 @@ class TasteProfile(BaseModel):
     favorite_phrases: List[str] = []
 
 
+class HybridToggleRequest(BaseModel):
+    enabled: bool
+
+
 class VerifiedProfile(BaseModel):
     """
     Represents a social profile that was confirmed (or auto-detected) as
@@ -68,6 +72,13 @@ class UserDocument(Document):
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # ── Engagement signals ───────────────────────────────────────────────────
+    # Stores per-message feedback: {message_id, sentiment, topics, timestamp}
+    message_feedback: List[Dict] = Field(default_factory=list)
+
+    # Tracks when the birthday greeting was last sent so we greet only once per year
+    last_birthday_greeted: Optional[date] = None
 
     class Settings:
         name = "users"
@@ -143,9 +154,90 @@ class UserDocument(Document):
         await user.insert()
         return user
 
+    async def sync_with_auth(self, token: str):
+        """
+        Synchronizes the user's profile and social links from the Auth backend.
+        """
+        import httpx
+        from app.core.config import settings
+        from datetime import datetime
+        
+        headers = {"Authorization": f"Bearer {token}"}
+        updated = False
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                # 1. Fetch Profile
+                profile_res = await client.get(f"{settings.REKO_AI_AUTH_URL}/api/v1/auth/profile", headers=headers)
+                if profile_res.status_code == 200:
+                    data = profile_res.json()
+                    if data.get("name") and self.name != data["name"]:
+                        self.name = data["name"]
+                        updated = True
+                    if data.get("email") and self.email != data["email"]:
+                        self.email = data["email"]
+                        updated = True
+                    if data.get("date_of_birth"):
+                        try:
+                            dob = datetime.fromisoformat(data["date_of_birth"]).date()
+                            if self.date_of_birth != dob:
+                                self.date_of_birth = dob
+                                updated = True
+                        except ValueError:
+                            pass
+                
+                # 2. Fetch Socials
+                socials_res = await client.get(f"{settings.REKO_AI_AUTH_URL}/api/v1/socials/", headers=headers)
+                if socials_res.status_code == 200:
+                    socials_data = socials_res.json()
+                    new_profiles = []
+                    from app.documents.user import VerifiedProfile
+                    for s in socials_data:
+                        # Extract domain/platform from URL naively
+                        url = s.get("url", "").lower()
+                        platform = s.get("name", "Website")
+                        if "github" in url: platform = "GitHub"
+                        elif "linkedin" in url: platform = "LinkedIn"
+                        elif "twitter" in url or "x.com" in url: platform = "Twitter"
+                        
+                        new_profiles.append(VerifiedProfile(
+                            platform=platform,
+                            url=s.get("url", ""),
+                            title=s.get("name", ""),
+                            confidence=1.0,
+                            confirmed_by_user=True
+                        ))
+                    
+                    # Simple comparison (length) or just overwrite
+                    self.verified_profiles = new_profiles
+                    updated = True
+
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to sync with Auth backend: {e}")
+
+        if updated:
+            await self.save()
+
     def is_birthday_today(self) -> bool:
         """Returns True if today matches the user's month and day of birth."""
         if not self.date_of_birth:
             return False
         today = date.today()
         return self.date_of_birth.month == today.month and self.date_of_birth.day == today.day
+
+    def should_greet_birthday(self) -> bool:
+        """
+        Returns True only if today is the user's birthday AND the greeting
+        has not already been sent today. Prevents repeat greetings when
+        the user opens multiple chats on their birthday.
+        """
+        if not self.is_birthday_today():
+            return False
+        today = date.today()
+        return self.last_birthday_greeted != today
+
+    async def record_birthday_greeted(self):
+        """Marks today as the day the birthday greeting was sent."""
+        self.last_birthday_greeted = date.today()
+        await self.save()

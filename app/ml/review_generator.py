@@ -14,35 +14,16 @@ class ReviewGenerator:
         pass
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def _call_llm(self, messages: list) -> str:
+    async def _call_llm(self, messages: list) -> str:
         """
-        Calls the primary model with a creative temperature,
-        falling back to the fallback model on failure.
+        Calls the primary model with a creative temperature.
         """
-        # Determine API key for primary model
-        primary_key = settings.DEEPSEEK_API_KEY
-        if settings.LITELLM_MODEL_PRIMARY.startswith("openrouter/"):
-            primary_key = settings.OPENROUTER_API_KEY
-
-        try:
-            response = completion(
-                model=settings.LITELLM_MODEL_PRIMARY,
-                messages=messages,
-                api_key=primary_key,
-                temperature=0.7,
-                max_tokens=250
-            )
-            return response.choices[0].message.content or ""
-        except Exception as e:
-            logger.warning(f"[ReviewGenerator] Primary model failed, falling back to {settings.LITELLM_MODEL_FALLBACK}: {e}")
-            response = completion(
-                model=settings.LITELLM_MODEL_FALLBACK,
-                messages=messages,
-                api_key=settings.OPENROUTER_API_KEY,
-                temperature=0.7,
-                max_tokens=250
-            )
-            return response.choices[0].message.content or ""
+        from app.core.llm import llm_service
+        return await llm_service.get_completion(
+            messages=messages,
+            temperature=0.7,
+            max_tokens=250
+        )
 
     async def generate(self, user_id: str, product: dict, search_context: str = None) -> dict:
         """
@@ -115,7 +96,7 @@ class ReviewGenerator:
 
         logger.info(f"[ReviewGenerator] Generating review for user {user.name} for product {product['name']}...")
         
-        review_text = self._call_llm(messages)
+        review_text = await self._call_llm(messages)
         
         # Post-process
         review_text = review_text.strip().replace("```", "")
@@ -126,7 +107,7 @@ class ReviewGenerator:
         # Retry logic if too short
         if len(sentences) < 3:
             logger.info("[ReviewGenerator] Review too short, retrying...")
-            review_text = self._call_llm(messages) # retry
+            review_text = await self._call_llm(messages) # retry
             sentences = re.split(r'(?<=[.!?])\s+', review_text.strip())
 
         # Truncate if too long

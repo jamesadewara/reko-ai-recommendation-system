@@ -39,48 +39,89 @@ PLATFORM_DOMAINS: Dict[str, List[str]] = {
 def _score_result(result: dict, platform: str, user_name: str, email_prefix: str) -> float:
     """
     Compute a weighted confidence score (0.0–1.0) for a search result.
-
-    Scoring components:
-      - Base score from the search engine                   (0–0.5)
-      - Domain match bonus: result URL lives on the expected
-        platform domain                                     (+0.30)
-      - Name/handle match bonus: user's name or email prefix
-        appears in the URL path                             (+0.15)
-      - Title relevance: user's name appears in result title (+0.05)
+    Hardened to reduce false positives from generic platform pages.
     """
-    base = min(float(result.get("score", 0.0)), 1.0) * 0.50
-
-    url   = (result.get("url") or "").lower()
+    url = (result.get("url") or "").lower()
     title = (result.get("title") or "").lower()
-    name_lower = user_name.lower().replace(" ", "")
-    email_prefix_lower = email_prefix.lower()
-
-    # Domain match
-    domain_bonus = 0.0
+    snippet = (result.get("content") or "").lower()
+    
+    # Clean user identity signals
+    name_slug = user_name.lower().replace(" ", "")
+    email_slug = email_prefix.lower()
+    name_parts = [p.lower() for p in user_name.split() if len(p) > 2]
+    
+    parsed = urlparse(url)
+    netloc = parsed.netloc.lstrip("www.")
+    path = parsed.path.lower()
+    
+    score = 0.0
+    
+    # 1. Platform Alignment Check
+    is_platform_search = platform.lower() != "web" and platform.lower() != "nigerian"
     expected_domains = PLATFORM_DOMAINS.get(platform.lower(), [])
+    
+    on_domain = False
     if expected_domains:
-        parsed = urlparse(url)
-        netloc = parsed.netloc.lstrip("www.")
         if any(netloc == d or netloc.endswith("." + d) for d in expected_domains):
-            domain_bonus = 0.30
-        else:
-            # Off-domain result — penalise heavily (cap base contribution)
-            base *= 0.30
-    else:
-        # "website" platform: any https domain is acceptable
-        domain_bonus = 0.15 if url.startswith("https://") else 0.0
+            on_domain = True
+    
+    if is_platform_search and not on_domain:
+        # Massive penalty for wrong domain when specifically searching for a platform
+        return 0.0
 
-    # Handle / name match in URL path
-    name_bonus = 0.0
-    url_path = urlparse(url).path.lower().replace("-", "").replace("_", "")
-    if name_lower and (name_lower in url_path or email_prefix_lower in url_path):
-        name_bonus = 0.15
+    # 2. Path Identity Signal (The strongest signal)
+    # Check if the name or email prefix is a distinct segment in the URL path
+    path_segments = [s for s in path.split("/") if s]
+    identity_in_path = False
+    if path_segments:
+        # Check first 2 segments (usually where the username/handle lives)
+        target_segments = path_segments[:2]
+        if any(name_slug in s or email_slug in s for s in target_segments):
+            identity_in_path = True
+            score += 0.45  # High bonus for identity in path
+        elif any(any(part in s for part in name_parts) for s in target_segments):
+            score += 0.20  # Partial name match in path
 
-    # Title relevance
-    title_bonus = 0.05 if user_name.lower() in title else 0.0
+    # 3. Content Relevance (Title & Snippet)
+    identity_in_content = False
+    if user_name.lower() in title:
+        identity_in_content = True
+        score += 0.20
+    elif any(part in title for part in name_parts):
+        score += 0.10
+        
+    if user_name.lower() in snippet or email_prefix.lower() in snippet:
+        identity_in_content = True
+        score += 0.15
 
-    raw = base + domain_bonus + name_bonus + title_bonus
-    return round(min(raw, 1.0), 4)
+    # 4. Search Engine Signal (Base credibility)
+    # We reduce the weight of this to 0.15 since it's often noisy
+    engine_score = min(float(result.get("score", 0.0)), 1.0) * 0.15
+    score += engine_score
+
+    # 5. Penalties
+    # If we are on a platform (e.g. GitHub) but there is NO identity in the path or content
+    if on_domain and not identity_in_path and not identity_in_content:
+        # Likely a trending page, login page, or generic search result
+        score -= 0.40
+        
+    # If the URL is just a homepage or generic path
+    if len(path_segments) < 1 and on_domain:
+        score -= 0.50
+
+    # 6. Platform "Authenticity" Bonus
+    if on_domain and identity_in_path:
+        score += 0.10
+
+    # Final clamp and rounding
+    final_score = round(max(0.0, min(score, 1.0)), 4)
+    
+    # If it's a platform search and we didn't find any identity, force it below threshold
+    if is_platform_search and not identity_in_path and final_score > 0.3:
+        final_score = 0.25
+        
+    return final_score
+
 
 
 class MultiSearchEngine:

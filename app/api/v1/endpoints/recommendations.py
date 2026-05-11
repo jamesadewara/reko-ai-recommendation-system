@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Optional
+from typing import Optional, Any, Callable
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from loguru import logger
@@ -36,7 +36,9 @@ class RecommendationRequest(BaseModel):
 )
 async def get_recommendations(
     request: RecommendationRequest,
-    token_claims: dict = Depends(verify_token)
+    token_claims: dict = Depends(verify_token),
+    on_status: Optional[Any] = None,
+    hybrid_override: Optional[bool] = None
 ):
     user = await UserDocument.get_or_create_from_token(token_claims)
         
@@ -44,6 +46,7 @@ async def get_recommendations(
         raise HTTPException(status_code=400, detail="User model not ready. Run analysis first.")
 
     # 1. Parse Context
+    if on_status: await on_status("Analyzing your request...")
     parsed_context = {}
     if request.context.message and not (request.context.mood and request.context.location and request.context.category):
         parsed_context = parse_context(request.context.message)
@@ -61,31 +64,21 @@ async def get_recommendations(
     category = parsed_context.get("category", "movies") or "movies"
 
     # 2. Generate CoT Reasoning
-    reasoning_chain = CoTReasoning().generate_reasoning_chain(user, parsed_context, category)
+    if on_status: await on_status(f"Generating reasoning for {category}...")
+    reasoning_chain = await CoTReasoning().generate_reasoning_chain(user, parsed_context, category)
 
     # 3. Build Query Embedding
+    if on_status: await on_status("Personalizing vector search...")
     interests = " ".join(user.taste_profile.interests) if user.taste_profile.interests else ""
     query_text = f"{interests} {parsed_context['mood']} {parsed_context['location']} {category}"
     query_emb = encode_text(query_text)
 
     # 4. FAISS Search
+    if on_status: await on_status(f"Scanning my knowledge base for {category}...")
     faiss_idx = await get_faiss_index()
     candidates = []
     
-    if faiss_idx.index is None or faiss_idx.index.ntotal == 0:
-        logger.warning("[Recommendations] FAISS index empty, falling back to manual scoring")
-        items = await ItemDocument.find(ItemDocument.category == category).to_list()
-        for item in items:
-            item_dict = item.model_dump()
-            if not item.embedding: continue
-            
-            # Cosine similarity
-            q_arr = np.array(query_emb)
-            i_arr = np.array(item.embedding)
-            sim = np.dot(q_arr, i_arr) / (np.linalg.norm(q_arr) * np.linalg.norm(i_arr))
-            item_dict["score"] = float(sim)
-            candidates.append(item_dict)
-    else:
+    if faiss_idx.index is not None and faiss_idx.index.ntotal > 0:
         results = faiss_idx.search(query_emb, k=50)
         for item_id, score in results:
             item = await ItemDocument.get(item_id)
@@ -95,17 +88,29 @@ async def get_recommendations(
                 candidates.append(item_dict)
 
     # 5. Hybrid Matching Boost
-    hybrid_matcher = HybridMatcher()
-    similar_users = await hybrid_matcher.find_similar_users(str(user.id))
+    similar_users = []
     
-    if similar_users:
-        cross_items = await hybrid_matcher.get_cross_recommendations(str(user.id), similar_users, category)
-        for c in candidates:
-            if str(c.get("id")) in cross_items:
-                c["score"] += 0.1
+    # Check if hybrid is allowed (Global setting OR Override)
+    allow_hybrid = user.allow_hybrid_recommendations
+    if hybrid_override is not None:
+        allow_hybrid = hybrid_override
+
+    if allow_hybrid:
+        if on_status: await on_status("Finding patterns from similar users...")
+        hybrid_matcher = HybridMatcher()
+        similar_users = await hybrid_matcher.find_similar_users(str(user.id))
+        
+        if similar_users:
+            cross_items = await hybrid_matcher.get_cross_recommendations(str(user.id), similar_users, category)
+            for c in candidates:
+                if str(c.get("id")) in cross_items:
+                    c["score"] += 0.1
+    else:
+        logger.info(f"[Recommendations] Hybrid mode disabled for user {user.id}")
 
     # 5b. Online Search Augmentation
     try:
+        if on_status: await on_status(f"Searching online for the latest {category}...")
         search_engine = MultiSearchEngine()
         online_query = f"top {category} recommendations 2026 {parsed_context.get('mood', '')}"
         if user.taste_profile.interests:
@@ -129,11 +134,12 @@ async def get_recommendations(
         logger.warning(f"[Recommendations] Failed to augment with online search: {e}")
 
     # 6. ReAct Agent Filtering
-    filtered = ReActAgent().filter_and_rank(candidates, parsed_context, user)
+    if on_status: await on_status("Finalizing ranking with ReAct Agent...")
+    top_picks = ReActAgent().filter_and_rank(candidates, parsed_context, user)
     
     # 7. Attach reasoning
-    top_10 = filtered[:10]
-    for i, item in enumerate(top_10):
+    if on_status: await on_status("Formatting your personalized list...")
+    for i, item in enumerate(top_picks):
         # Remove massive raw embeddings from output
         if "embedding" in item:
             del item["embedding"]
@@ -152,16 +158,16 @@ async def get_recommendations(
             "item_id": str(item.get("id", item.get("_id", "unknown"))),
             "name": item.get("name", "Unknown Item"),
             "category": item.get("category", "products"),
-            "image": item.get("metadata", {}).get("image_url") or "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=400",
+            "image": item.get("metadata", {}).get("image_url") or "",
             "score": item.get("score", 0.0),
             "reasoning": reason,
             "meta": ", ".join(item.get("metadata", {}).get("genre", [])) or item.get("category", "")
         }
             
-        top_10[i] = item_out
+        top_picks[i] = item_out
 
     return {
-        "items": top_10,
+        "items": top_picks,
         "reasoning_chain": reasoning_chain,
         "context": parsed_context,
         "similar_users_found": len(similar_users),

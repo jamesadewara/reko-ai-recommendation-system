@@ -62,7 +62,7 @@ async def generate_review(
 
     # 5. Save to Database
     review_doc = ReviewDocument(
-        user_id=str(user.id),
+        user_id=user.auth_user_id,
         product_name=product["name"],
         product_category=product["category"],
         generated_text=review_text,
@@ -104,5 +104,5 @@ async def get_user_style(
 async def get_review_history(token_claims: dict = Depends(verify_token)):
     user = await UserDocument.get_or_create_from_token(token_claims)
 
-    reviews = await ReviewDocument.find(ReviewDocument.user_id == str(user.id)).to_list()
+    reviews = await ReviewDocument.find(ReviewDocument.user_id == user.auth_user_id).to_list()
     return reviews

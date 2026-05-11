@@ -1,39 +1,22 @@
 import json
 from typing import Dict
-
 from loguru import logger
-from litellm import completion
-from tenacity import retry, stop_after_attempt, wait_exponential
-
-from app.core.config import settings
 
 class TasteAnalyzer:
     def __init__(self):
         pass
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def _call_llm(self, messages: list) -> dict:
+    async def _call_llm(self, messages: list) -> str:
         """
-        Calls the primary model with a JSON object format requirement,
-        falling back to the fallback model on failure.
+        Calls the primary model with a JSON object format requirement.
         """
-        try:
-            response = completion(
-                model=settings.LITELLM_MODEL_PRIMARY,
-                messages=messages,
-                temperature=0.3,
-                response_format={"type": "json_object"}
-            )
-            return response
-        except Exception as e:
-            logger.warning(f"[TasteAnalyzer] Primary model failed, falling back to {settings.LITELLM_MODEL_FALLBACK}: {e}")
-            return completion(
-                model=settings.LITELLM_MODEL_FALLBACK,
-                messages=messages,
-                temperature=0.3
-            )
+        from app.core.llm import llm_service
+        return await llm_service.get_completion(
+            messages=messages,
+            temperature=0.3
+        )
 
-    def analyze(self, corpus: str) -> dict:
+    async def analyze(self, corpus: str) -> dict:
         """
         Analyze the user's corpus using LLM to extract interests, traits, and cultural context.
         """
@@ -73,12 +56,13 @@ class TasteAnalyzer:
         ]
 
         try:
-            response = self._call_llm(messages)
-            content = response.choices[0].message.content
+            content = await self._call_llm(messages)
             
-            # Clean possible markdown artifacts if fallback didn't respect JSON format strictly
+            # Clean possible markdown artifacts
             if content.startswith("```json"):
                 content = content.replace("```json", "").replace("```", "").strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
             
             parsed_result = json.loads(content)
             

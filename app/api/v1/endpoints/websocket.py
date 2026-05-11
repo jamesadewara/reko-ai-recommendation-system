@@ -43,6 +43,42 @@ async def websocket_control(
             return
 
         logger.info(f"User {user_id} connected to Control Plane for {chat_id}")
+        
+        # Trigger background profile synchronization
+        from app.documents.user import UserDocument
+        async def background_sync():
+            try:
+                user = await UserDocument.get_or_create_from_token(payload)
+                await user.sync_with_auth(token)
+            except Exception as e:
+                logger.error(f"Background sync failed: {e}")
+                
+        asyncio.create_task(background_sync())
+
+        # Auto-trigger greeting if it's a new chat
+        chat = await ChatSession.get(chat_id)
+        if chat and len(chat.messages) == 0:
+            user = await UserDocument.get_or_create_from_token(payload)
+            is_fresh = not user.taste_profile.interests or len(user.taste_profile.interests) < 3
+
+            trigger_message = None
+            if user.should_greet_birthday():
+                trigger_message = "[Birthday Initialization]"
+                # Stamp now so opening other chats today doesn't re-trigger
+                asyncio.create_task(user.record_birthday_greeted())
+            elif is_fresh:
+                trigger_message = "[System Initialization]"
+
+            if trigger_message:
+                session = await stream_manager.create_session(chat_id)
+                await websocket.send_json({
+                    "type": "stream_init",
+                    "stream_id": session.stream_id,
+                    "url": f"/api/v1/chats/{chat_id}/stream/{session.stream_id}"
+                })
+                from app.api.v1.endpoints.chats import process_and_stream, ChatMessageRequest
+                init_payload = ChatMessageRequest(message=trigger_message, mode="chat", hybrid=True)
+                asyncio.create_task(process_and_stream(chat_id=chat_id, user_id=user_id, payload=init_payload, stream_id=session.stream_id))
 
         # 3. Control Loop
         while True:
@@ -59,7 +95,7 @@ async def websocket_control(
                     await stream_manager.interrupt_chat(chat_id)
                     await manager.send_to_user(user_id, {"type": "control_ack", "action": "interrupted"})
 
-                elif msg_type == "message" or msg_type == "init":
+                elif msg_type == "message" or msg_type == "init" or msg_type == "start_flow" or msg_type == "flow_complete":
                     # --- HYBRID FLOW: User sends via WS -> Server triggers SSE ---
                     
                     # Ensure any existing streams for this chat are stopped first
@@ -74,10 +110,17 @@ async def websocket_control(
                         await websocket.send_json({"type": "error", "message": "Chat not found"})
                         continue
                         
+                    if msg_type == "init" and len(chat.messages) > 0:
+                        # Ignore redundant init pulses if chat already has messages
+                        continue
+                        
                     if msg_type == "message":
-                        user_msg = ChatMessage(sender_id=user_id, content=content)
-                        chat.messages.append(user_msg)
-                        await chat.save()
+                        # Skip saving hidden system triggers to the database
+                        HIDDEN_TRIGGERS = ["[Contextual Mode Switch]"]
+                        if content not in HIDDEN_TRIGGERS:
+                            user_msg = ChatMessage(sender_id=user_id, content=content)
+                            chat.messages.append(user_msg)
+                            await chat.save()
 
                     # 2. Initialize SSE Stream Session
                     session = await stream_manager.create_session(chat_id)
@@ -89,10 +132,33 @@ async def websocket_control(
                         "url": f"/api/v1/chats/{chat_id}/stream/{session.stream_id}"
                     })
 
+                    if msg_type == "start_flow":
+                        from app.services.flows import flow_service
+                        
+                        # Gather history for context
+                        history = []
+                        for m in chat.messages[-5:]:
+                            history.append({"role": "assistant" if m.sender_id == "ai_system" else "user", "content": m.content})
+                        
+                        steps = await flow_service.get_flow_steps(mode, chat_history=history)
+                        await websocket.send_json({
+                            "type": "flow_step",
+                            "steps": steps
+                        })
+                        continue # Don't trigger AI processing yet, wait for flow answers
+                        
                     # 4. Trigger AI Processing (Imported from chats.py)
                     from app.api.v1.endpoints.chats import process_and_stream, ChatMessageRequest
+                    
+                    if msg_type == "message":
+                        internal_content = content
+                    elif msg_type == "flow_complete":
+                        internal_content = "[Flow Complete]"
+                    else:
+                        internal_content = "[System Initialization]"
+                        
                     payload = ChatMessageRequest(
-                        message=content if msg_type == "message" else "[System Initialization]",
+                        message=internal_content,
                         mode=mode,
                         hybrid=data.get("hybrid", True),
                         flow_answers=data.get("flow_answers")
@@ -112,18 +178,48 @@ async def websocket_control(
                     await manager.send_to_user(user_id, {"type": "typing", "status": status})
 
                 elif msg_type == "edit":
-                    # Handle message edit logic
+                    # Handle message edit logic: Truncate and re-trigger AI
                     msg_id = data.get("message_id")
                     new_content = data.get("content")
+                    mode = data.get("mode", "chat")
+                    
                     if msg_id and new_content:
                         chat = await ChatSession.get(chat_id)
                         if chat:
-                            for m in chat.messages:
-                                if m.id == msg_id:
-                                    m.content = new_content
-                                    break
-                            await chat.save()
-                            await manager.send_to_user(user_id, {"type": "edit_ack", "message_id": msg_id})
+                            idx = next((i for i, m in enumerate(chat.messages) if m.id == msg_id), -1)
+                            if idx != -1:
+                                # Update content and truncate history
+                                chat.messages[idx].content = new_content
+                                chat.messages = chat.messages[:idx + 1]
+                                await chat.save()
+                                
+                                # Acknowledge truncation
+                                await manager.send_to_user(user_id, {"type": "edit_ack", "message_id": msg_id, "truncated": True})
+                                
+                                # Stop any existing stream
+                                await stream_manager.interrupt_chat(chat_id)
+                                
+                                # Trigger new AI Response
+                                session = await stream_manager.create_session(chat_id)
+                                await websocket.send_json({
+                                    "type": "stream_init",
+                                    "stream_id": session.stream_id,
+                                    "url": f"/api/v1/chats/{chat_id}/stream/{session.stream_id}"
+                                })
+
+                                from app.api.v1.endpoints.chats import process_and_stream, ChatMessageRequest
+                                payload = ChatMessageRequest(
+                                    message=new_content,
+                                    mode=mode,
+                                    hybrid=data.get("hybrid", True),
+                                    flow_answers=data.get("flow_answers")
+                                )
+                                asyncio.create_task(process_and_stream(
+                                    chat_id=chat_id,
+                                    user_id=user_id,
+                                    payload=payload,
+                                    stream_id=session.stream_id
+                                ))
 
             except asyncio.TimeoutError:
                 # Send a ping to check if client is still there

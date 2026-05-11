@@ -6,19 +6,30 @@ from loguru import logger
 class StreamSession:
     def __init__(self, chat_id: str):
         self.chat_id = chat_id
-        self.queue = asyncio.Queue()
+        self.items = []
         self.interrupted = asyncio.Event()
         self.finished = asyncio.Event()
         self.stream_id = str(uuid.uuid4())
+        self._lock = asyncio.Lock()
+        self._new_item_event = asyncio.Condition()
 
     async def push(self, event: str, data: Any):
-        await self.queue.put({"event": event, "data": data})
+        item = {"event": event, "data": data}
+        async with self._new_item_event:
+            self.items.append(item)
+            self._new_item_event.notify_all()
+        if event == "done":
+            self.finished.set()
 
-    async def get(self) -> Optional[Dict[str, Any]]:
-        try:
-            return await self.queue.get()
-        except asyncio.CancelledError:
-            return None
+    async def get_items_after(self, index: int):
+        """Returns new items after the given index, or waits for them."""
+        async with self._new_item_event:
+            while index >= len(self.items):
+                if self.finished.is_set() or self.interrupted.is_set():
+                    return []
+                await self._new_item_event.wait()
+            
+            return self.items[index:], len(self.items)
 
 class StreamManager:
     def __init__(self):

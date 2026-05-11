@@ -23,3 +23,10 @@ class ChatSession(Document):
 
     class Settings:
         name = "chat_sessions"
+
+
+class MessageFeedbackRequest(BaseModel):
+    """Request schema for submitting like/dislike feedback on an AI message."""
+    message_id: str
+    sentiment: str          # "like" | "dislike"
+    topics: List[str] = []  # optional topic tags extracted by the client

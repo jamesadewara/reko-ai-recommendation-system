@@ -51,7 +51,7 @@ async def test_full_flow():
     from app.services.embedding_encoder import build_user_embedding
 
     style = extract_style_fingerprint(user.raw_corpus)
-    taste = TasteAnalyzer().analyze(user.raw_corpus)
+    taste = await TasteAnalyzer().analyze(user.raw_corpus)
     embedding = build_user_embedding(taste, style)
     
     user.style_fingerprint = style

@@ -8,12 +8,63 @@ from loguru import logger
 from beanie import PydanticObjectId
 from sse_starlette.sse import EventSourceResponse
 
-from app.documents.chat import ChatSession, Message as ChatMessage
+from app.documents.chat import ChatSession, Message as ChatMessage, MessageFeedbackRequest
 from app.core.security import get_user_id, get_user_id_from_anywhere
 from app.schemas.chat import ChatUpdate, ChatResponse, ChatMessageRequest, ChatDetailsResponse
 from app.managers.stream_manager import stream_manager
 
 router = APIRouter()
+
+@router.post("/{chat_id}/message/{message_id}/feedback", status_code=status.HTTP_200_OK)
+async def submit_message_feedback(
+    chat_id: str,
+    message_id: str,
+    payload: MessageFeedbackRequest,
+    user_id: str = Depends(get_user_id),
+):
+    """
+    Records a like/dislike on an AI message and updates the user's taste profile.
+    Liked messages boost topic interests; disliked messages reduce them.
+    """
+    if not PydanticObjectId.is_valid(chat_id):
+        raise HTTPException(status_code=400, detail="Invalid Chat ID")
+
+    chat = await ChatSession.get(chat_id)
+    if not chat or chat.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    from app.documents.user import UserDocument
+    user = await UserDocument.find_by_id_or_uuid(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # 1. Store raw feedback signal
+    user.message_feedback.append({
+        "message_id": message_id,
+        "chat_id": chat_id,
+        "sentiment": payload.sentiment,
+        "topics": payload.topics,
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+    })
+
+    # 2. Update taste profile based on signal
+    if payload.sentiment == "like" and payload.topics:
+        current = set(user.taste_profile.interests)
+        for t in payload.topics:
+            current.add(t.lower())
+        user.taste_profile.interests = list(current)[:50]  # cap at 50
+
+    elif payload.sentiment == "dislike" and payload.topics:
+        current = set(user.taste_profile.interests)
+        for t in payload.topics:
+            current.discard(t.lower())
+        user.taste_profile.interests = list(current)
+
+    await user.save()
+    logger.info(f"Feedback '{payload.sentiment}' recorded for msg {message_id} by user {user_id}")
+    return {"status": "ok", "sentiment": payload.sentiment}
+
+
 
 @router.get("/", response_model=List[ChatResponse])
 async def list_chats(user_id: str = Depends(get_user_id)):
@@ -121,26 +172,44 @@ async def stream_chat(chat_id: str, stream_id: str, user_id: str = Depends(get_u
     """
     session = await stream_manager.get_session(stream_id)
     if not session or session.chat_id != chat_id:
-        raise HTTPException(status_code=404, detail="Stream session not found")
+        # If the session is missing, it's likely already been handled and removed.
+        # We return a 'done' event instead of an error to prevent the UI from showing 
+        # "Stream expired" during rapid re-renders or browser retries.
+        async def finished_generator():
+            yield json.dumps({"event": "done"})
+        return EventSourceResponse(finished_generator())
 
     async def event_generator():
+        last_index = 0
         try:
             while True:
                 if session.interrupted.is_set():
                     yield json.dumps({"event": "error", "message": "Interrupted by user"})
                     break
                 
-                item = await session.get()
-                if item is None: break
+                # Fetch any items after our last seen index
+                new_items, current_len = await session.get_items_after(last_index)
+                if not new_items:
+                    # If no items and session is finished/interrupted, we're done
+                    if session.finished.is_set() or session.interrupted.is_set():
+                        break
+                    continue # Should not happen with wait logic
                 
-                yield json.dumps(item)
+                for item in new_items:
+                    yield json.dumps(item)
+                    if item["event"] == "done":
+                        return # Connection finished naturally
                 
-                if item["event"] == "done":
-                    break
-        finally:
-            await stream_manager.remove_session(stream_id)
+                last_index = current_len
 
-    return EventSourceResponse(event_generator())
+        except Exception as e:
+            logger.error(f"SSE Generator Error: {e}")
+        finally:
+            # We don't remove immediately to allow for retries.
+            # StreamManager cleanup logic should be added if memory becomes an issue.
+            pass
+
+    return EventSourceResponse(event_generator(), ping=20)
 
 @router.get("/{chat_id}/placeholder")
 async def stream_placeholder(
@@ -148,36 +217,18 @@ async def stream_placeholder(
     mode: str = "chat",
     user_id: str = Depends(get_user_id_from_anywhere)
 ):
-    """
-    SSE endpoint that streams time-aware and user-aware placeholders.
-    Allows the UI to show 'AI is thinking' messages that feel personalized.
-    """
     from app.services.placeholder import get_personalized_placeholder
     from app.documents.user import UserDocument
     
     async def placeholder_generator():
         user = await UserDocument.find_by_id_or_uuid(user_id)
         
-        # Initial punchy placeholder (streamed for typing effect)
+        # Fetch the full text and yield it once
         text = await get_personalized_placeholder(user, mode)
-        chunk_size = 3
-        for i in range(0, len(text), chunk_size):
-            chunk = text[i:i+chunk_size]
-            yield json.dumps({"event": "placeholder_token", "text": chunk})
-            await asyncio.sleep(0.05)
+        yield json.dumps({"event": "placeholder_token", "text": text})
         
-        # Signal completion of placeholder
+        # Signal completion
         yield json.dumps({"event": "placeholder_done"})
-        
-        # Subsequent 'thinking' steps if the client stays connected
-        steps = [
-            "Aligning with your latest taste profile...",
-            "Checking local context and timing...",
-            "Synthesizing recommendations..."
-        ]
-        for step in steps:
-            await asyncio.sleep(1.5)
-            yield json.dumps({"event": "status", "text": step})
 
     return EventSourceResponse(placeholder_generator())
 
@@ -190,6 +241,9 @@ async def process_and_stream(chat_id: str, user_id: str, payload: ChatMessageReq
     if not session: return
 
     try:
+        # 0. IMMEDIATE FEEDBACK
+        await session.push("status", "Thinking...")
+
         # 1. SETUP & CONTEXT
         chat = await ChatSession.get(chat_id)
         msg_lower = (payload.message or "").lower()
@@ -246,9 +300,53 @@ async def process_and_stream(chat_id: str, user_id: str, payload: ChatMessageReq
 
         # 2. ACTIONS
         recommendations = []
+        reasoning_chain = []
         review = None
         
+        # Hardcoded Greetings for Initializations
+        if payload.message in ["[System Initialization]", "[Birthday Initialization]"]:
+            name = user.name.split()[0] if user and user.name else "fam"
+            
+            if payload.message == "[Birthday Initialization]":
+                greeting_content = (
+                    f"Happy Birthday, {name}! 🎉 Wishing you an amazing day filled with joy and great vibes.\n\n"
+                    "Since it's your special day, do you want me to recommend a fun spot to celebrate, "
+                    "or are we just catching up?"
+                )
+            else:
+                greeting_content = (
+                    f"How far, {name}? I'm Reko — tuned to your taste.\n\n"
+                    "Use the **mode picker** above the composer to switch:\n\n"
+                    "- ⚡ **Instant chat** for quick questions\n"
+                    "- 🧭 **Recommendations** — I'll ask a few smart questions\n"
+                    "- ✍️ **Review simulator** — I'll write a review in your voice"
+                )
+            
+            chunk_size = 5
+            for i in range(0, len(greeting_content), chunk_size):
+                await session.push("token", {"content": greeting_content[i:i+chunk_size]})
+                await asyncio.sleep(0.01)
+                
+            ai_msg = ChatMessage(
+                sender_id="ai_system", 
+                content=greeting_content
+            )
+            chat.messages.append(ai_msg)
+            chat.updated_at = datetime.datetime.utcnow()
+            await chat.save()
+
+            await session.push("done", {
+                "recommendations": [],
+                "review": None,
+                "has_analysis": False,
+                "has_simulator": False
+            })
+            return
+
         if detected_intent == "recommendation_request":
+            async def push_status(msg: str):
+                await session.push("status", msg)
+
             await session.push("status", "Finding perfect matches...")
             from app.api.v1.endpoints.recommendations import get_recommendations, RecommendationRequest, ContextInput
             rec_req = RecommendationRequest(context=ContextInput(message=payload.message))
@@ -257,62 +355,126 @@ async def process_and_stream(chat_id: str, user_id: str, payload: ChatMessageReq
             claims = {"user_id": user_id}
             if user: claims["email"] = user.email
             
-            res = await get_recommendations(rec_req, token_claims=claims)
+            res = await get_recommendations(rec_req, token_claims=claims, on_status=push_status, hybrid_override=payload.hybrid)
             recommendations = res.get("items", [])
+            reasoning_chain = res.get("reasoning_chain", [])
         
         elif detected_intent == "review_request":
             await session.push("status", "Analyzing your style for the review...")
             from app.ml.review_generator import ReviewGenerator
-            product_info = {"name": payload.message.replace("review", "").strip() or "item"}
-            review = await ReviewGenerator().generate(user_id, product_info)
+            from app.documents.review import ReviewDocument
+            
+            product_name = payload.message.replace("review", "").strip() or "item"
+            product_info = {"name": product_name}
+            
+            try:
+                review_raw = await ReviewGenerator().generate(user_id, product_info)
+                
+                # Persistence
+                rev_doc = ReviewDocument(
+                    user_id=user_id,
+                    product_name=product_name,
+                    product_category="General", # We could infer this later
+                    generated_text=review_raw["review_text"],
+                    predicted_rating=4.5, # Heuristic baseline
+                    confidence=review_raw["style_match_score"],
+                    style_snapshot={
+                        "markers": review_raw["used_nigerian_markers"],
+                        "sentences": review_raw["sentence_count"]
+                    }
+                )
+                await rev_doc.save()
+                
+                # Map for Frontend Simulator
+                review = {
+                    "product": rev_doc.product_name,
+                    "review": rev_doc.generated_text,
+                    "rating": 4, # UI expects integer 1-5
+                    "confidence": rev_doc.confidence,
+                    "markers": rev_doc.style_snapshot.get("markers", [])
+                }
+            except Exception as e:
+                logger.error(f"Review Generation Failed: {e}")
+                # Fallback to empty to prevent UI crash, but allow chat to continue
+                review = None
 
         # 3. LLM STREAMING
-        from litellm import acompletion
-        from app.core.config import settings
         from litellm.exceptions import RateLimitError
         
-        sys_prompt = f"You are Reko AI. Mode: {mode}. Intent: {detected_intent}. Context: {context_notes}"
+        sys_prompt = (
+            f"You are Reko AI. Mode: {mode}. Intent: {detected_intent}. Context: {context_notes}. "
+            "IMPORTANT: Do not overload the user with information. Be concise, direct, and respect their attention span. "
+            "If making recommendations, briefly introduce them and let the UI cards do the heavy lifting."
+        )
         messages = [{"role": "system", "content": sys_prompt}]
         for m in chat.messages[-10:]:
             role = "assistant" if m.sender_id == "ai_system" else "user"
             messages.append({"role": role, "content": m.content})
         
-        messages.append({"role": "user", "content": payload.message or "[Process]"})
+        user_content = payload.message or "[Process]"
+        if user_content == "[Contextual Mode Switch]":
+            if mode == "recommend": user_content = "Based on what we've discussed, please give me some fresh recommendations."
+            elif mode == "review": user_content = "Based on our conversation, please help me write a review for the item we discussed."
+            else: user_content = "Let's continue our conversation."
+        elif user_content == "[Start Flow]":
+            if mode == "recommend": user_content = "I want some recommendations. Please ask me some questions to understand what I'm looking for."
+            elif mode == "review": user_content = "I want to write a review. Please ask me what item I'd like to review and any details you need."
+            else: user_content = "Hello! I'm ready to start."
+        elif user_content == "[Flow Complete]":
+            answers = payload.flow_answers or {}
+            ans_str = ", ".join([f"{k}: {v}" for k, v in answers.items()])
+            if mode == "recommend": user_content = f"I've answered your questions: {ans_str}. Now, please give me some tailored recommendations."
+            elif mode == "review": user_content = f"I want you to simulate a review for me. Here are the details: {ans_str}. Please write it in my voice."
+            else: user_content = f"I've finished the steps: {ans_str}."
+
+        messages.append({"role": "user", "content": user_content})
+
+        # Create placeholder AI message early so it shows on refresh
+        ai_msg = ChatMessage(
+            sender_id="ai_system",
+            content="...",
+            has_analysis=(detected_intent == "recommendation_request"),
+            has_simulator=(detected_intent == "review_request"),
+            metadata={"recommendations": recommendations, "review": review, "reasoning_chain": reasoning_chain}
+        )
+        chat.messages.append(ai_msg)
+        await chat.save()
+        msg_index = len(chat.messages) - 1
 
         try:
-            response = await acompletion(
-                model=settings.LITELLM_MODEL_PRIMARY,
+            from app.core.llm import llm_service
+            response = llm_service.get_streaming_completion(
                 messages=messages,
-                api_key=settings.DEEPSEEK_API_KEY if not settings.LITELLM_MODEL_PRIMARY.startswith("openrouter") else settings.OPENROUTER_API_KEY,
-                stream=True,
-                fallbacks=[{"model": settings.LITELLM_MODEL_FALLBACK, "api_key": settings.OPENROUTER_API_KEY}]
+                temperature=0.7
             )
 
             full_content = ""
             async for chunk in response:
                 if session.interrupted.is_set(): 
                     logger.warning(f"Stream {stream_id} interrupted mid-flow.")
-                    return
+                    break
                 
                 token = chunk.choices[0].delta.content or ""
                 if token:
                     full_content += token
                     await session.push("token", {"content": token})
 
-            # 4. FINALIZATION
-            ai_msg = ChatMessage(
-                sender_id="ai_system", 
-                content=full_content,
-                has_analysis=(detected_intent == "recommendation_request"),
-                has_simulator=(detected_intent == "review_request"),
-                metadata={"recommendations": recommendations, "review": review}
-            )
-            chat.messages.append(ai_msg)
+            # 4. FINALIZATION - Update the message we created earlier
+            chat.messages[msg_index].content = full_content
+            chat.messages[msg_index].metadata = {"recommendations": recommendations, "review": review, "reasoning_chain": reasoning_chain}
             chat.updated_at = datetime.datetime.utcnow()
+            # --- Auto-rename if first meaningful exchange and still using default ---
+            if chat.name.lower() in ["new chat", "new conversation"] and len(chat.messages) >= 2:
+                user_q = payload.message or chat.messages[0].content
+                if user_q and not user_q.startswith("["): # Skip internal system messages
+                    words = user_q.split()[:5]
+                    chat.name = " ".join(words) + ("..." if len(user_q.split()) > 5 else "")
+                
             await chat.save()
 
             await session.push("done", {
                 "recommendations": recommendations,
+                "reasoning_chain": reasoning_chain,
                 "review": review,
                 "has_analysis": ai_msg.has_analysis,
                 "has_simulator": ai_msg.has_simulator
@@ -336,5 +498,10 @@ async def process_and_stream(chat_id: str, user_id: str, payload: ChatMessageReq
 
     except Exception as e:
         logger.error(f"Processing Error: {e}")
-        await session.push("error", {"message": str(e)})
-        await session.push("done", {})
+        try:
+            # Send specific error if we can, else generic
+            msg = str(e) if "Quota" in str(e) else "My apologies, I hit a snag while processing that. Please try again."
+            await session.push("error", {"message": msg})
+            await session.push("done", {})
+        except:
+            pass # Session might be closed or interrupted
