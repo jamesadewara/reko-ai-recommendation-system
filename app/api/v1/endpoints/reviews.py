@@ -100,7 +100,7 @@ async def get_user_style(
         
     return user.style_fingerprint
 
-@router.get("/history", summary="Get user's generated review history")
+@router.get("/history", response_model=List[ReviewDocument], summary="Get user's generated review history")
 async def get_review_history(token_claims: dict = Depends(verify_token)):
     user = await UserDocument.get_or_create_from_token(token_claims)
 

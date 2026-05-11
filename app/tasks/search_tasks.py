@@ -37,7 +37,8 @@ async def deep_search_user(user_id: str):
         await user.save()
 
         logger.info(f"[SearchTask] Deep search complete for {user_id}. Corpus: {len(corpus)} chars")
-        await broker.kick("analyze_user_data", user_id=user_id)
+        from app.tasks.analysis_tasks import analyze_user_data
+        await analyze_user_data.kiq(user_id=user_id)
 
     except Exception as e:
         logger.error(f"[SearchTask] Deep search failed for {user_id}: {e}")
@@ -148,7 +149,7 @@ async def refresh_social_profiles(user_id: str):
     if changed:
         logger.info(f"[RefreshTask] Profile change detected — triggering model retrain for {user_id}")
         try:
-            await broker.kick("deep_search_user", user_id=user_id)
+            await deep_search_user.kiq(user_id=user_id)
         except Exception as e:
             logger.error(f"[RefreshTask] Failed to kick retrain task: {e}")
 
@@ -196,7 +197,7 @@ async def create_user_profile(payload: dict):
         user_id = str(new_user.id)
         logger.info(f"[CreateProfile] Created UserDocument for {email} (ID: {user_id})")
 
-    await broker.kick("deep_search_user", user_id=user_id)
+    await deep_search_user.kiq(user_id=user_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,7 +216,7 @@ async def global_daily_refresh():
     count = 0
     for user in users:
         # Trigger refresh for each user
-        await broker.kick("refresh_social_profiles", user_id=str(user.auth_user_id))
+        await refresh_social_profiles.kiq(user_id=str(user.auth_user_id))
         count += 1
         
     logger.info(f"✅ [GlobalRefresh] Dispatched refresh tasks for {count} users.")

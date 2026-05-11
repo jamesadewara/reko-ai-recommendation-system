@@ -241,9 +241,6 @@ async def process_and_stream(chat_id: str, user_id: str, payload: ChatMessageReq
     if not session: return
 
     try:
-        # 0. IMMEDIATE FEEDBACK
-        await session.push("status", "Thinking...")
-
         # 1. SETUP & CONTEXT
         chat = await ChatSession.get(chat_id)
         msg_lower = (payload.message or "").lower()
@@ -253,7 +250,7 @@ async def process_and_stream(chat_id: str, user_id: str, payload: ChatMessageReq
             "recommendation_request": r"(recommend|suggest|what should i|what to|hungry|bored|watch|eat|listen|read)",
             "review_request": r"(review|write about|what do you think|rate this|opinion on)",
             "share_social_link": r"(https?://\S+|github\.com/\S+|linkedin\.com/\S+|twitter\.com/\S+|x\.com/\S+)",
-            "greeting": r"(hi|hello|hey|how far)",
+            "greeting": r"^(hi|hello|hey|how far|good morning|good afternoon|good evening)",
             "onboarding_social": r"(my social|my github|my linkedin)"
         }
         
@@ -264,6 +261,11 @@ async def process_and_stream(chat_id: str, user_id: str, payload: ChatMessageReq
             for intent, pattern in INTENT_PATTERNS.items():
                 if re.search(pattern, msg_lower):
                     detected_intent = intent; break
+        
+        # 1b. SELECTIVE FEEDBACK: Only show "Thinking..." if we're actually doing heavy lifting
+        HEAVY_INTENTS = ["recommendation_request", "review_request"]
+        if detected_intent in HEAVY_INTENTS or mode != "chat":
+            await session.push("status", "Thinking...")
 
         # Gather User Context
         from app.documents.user import UserDocument

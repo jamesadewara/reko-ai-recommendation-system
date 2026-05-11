@@ -1,3 +1,4 @@
+import re
 import numpy as np
 from typing import Optional, Any, Callable
 from fastapi import APIRouter, Depends, HTTPException
@@ -139,6 +140,14 @@ async def get_recommendations(
     
     # 7. Attach reasoning
     if on_status: await on_status("Formatting your personalized list...")
+    
+    # Push individual reasoning steps to the client for real-time visibility
+    if on_status and reasoning_chain:
+        for step in reasoning_chain:
+            # Strip numbering if it's there to keep it clean in the approach view
+            clean_step = re.sub(r'^(\d+\.|-)\s*', '', step)
+            await on_status(clean_step)
+
     for i, item in enumerate(top_picks):
         # Remove massive raw embeddings from output
         if "embedding" in item:

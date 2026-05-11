@@ -1,0 +1,158 @@
+name: Production Deployment Pipeline (OCI A1)
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/reko-ai-recommendation-system
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio httpx
+
+      - name: Run tests
+        env:
+          DEBUG: "True"
+          INTERNAL_SERVICE_SECRET: ${{ secrets.INTERNAL_SERVICE_SECRET }}
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml
+
+  build-production:
+    name: Build ARM64 Production Image
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push ARM64 image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: production
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v1.0.${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-to-oci:
+    name: Deploy to OCI A1 via Ansible
+    runs-on: ubuntu-latest
+    needs: build-production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible boto3 botocore
+
+      - name: Create SSH key from secret
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ANSIBLE_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "Host *" >> ~/.ssh/config
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Run Ansible playbook for OCI deployment
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          DOCKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          REKO_REC_PROD_HOST: ${{ secrets.REKO_REC_PROD_HOST }}
+          REKO_REC_SSH_USER: ${{ secrets.REKO_REC_SSH_USER }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RABBITMQ_URL: ${{ secrets.RABBITMQ_URL }}
+          MONGO_URL: ${{ secrets.MONGO_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          INTERNAL_SERVICE_SECRET: ${{ secrets.INTERNAL_SERVICE_SECRET }}
+        run: |
+          ansible-playbook \
+            -i ansible/oci_inventory.yml \
+            -e "host_ip=$REKO_REC_PROD_HOST" \
+            -e "ansible_user=$REKO_REC_SSH_USER" \
+            -e "docker_image=$DOCKER_IMAGE" \
+            -e "docker_username=$DOCKER_USERNAME" \
+            -e "docker_password=$DOCKER_PASSWORD" \
+            -e "database_url=$DATABASE_URL" \
+            -e "rabbitmq_url=$RABBITMQ_URL" \
+            -e "mongo_url=$MONGO_URL" \
+            -e "gemini_api_key=$GEMINI_API_KEY" \
+            -e "deepseek_api_key=$DEEPSEEK_API_KEY" \
+            -e "tavily_api_key=$TAVILY_API_KEY" \
+            -e "internal_service_secret=$INTERNAL_SERVICE_SECRET" \
+            ansible/deploy-oci.yml
+
+  rollback-on-failure:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: deploy-to-oci
+    if: failure()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Ansible
+        run: pip install ansible
+
+      - name: Create SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ANSIBLE_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Rollback
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          REKO_REC_PROD_HOST: ${{ secrets.REKO_REC_PROD_HOST }}
+          REKO_REC_SSH_USER: ${{ secrets.REKO_REC_SSH_USER }}
+        run: |
+          ansible-playbook \
+            -i ansible/oci_inventory.yml \
+            -e "host_ip=$REKO_REC_PROD_HOST" \
+            -e "ansible_user=$REKO_REC_SSH_USER" \
+            ansible/rollback-oci.yml

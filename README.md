@@ -60,4 +60,4 @@ uvicorn app.main:app --reload
 - **Content**: Nollywood movies, Afrobeats, Jollof, Suya, Amala
 
 ## License
-MIT
+APACHE 2.0 LICENSE

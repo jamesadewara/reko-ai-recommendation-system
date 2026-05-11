@@ -1,0 +1,66 @@
+---
+# Reko AI Recommendation System - OCI Rollback Playbook
+
+- name: Rollback Reko AI Recommendation System on OCI
+  hosts: reko_oci_instances
+  become: yes
+
+  vars:
+    docker_compose_dir: /opt/reko-recommendation-system
+    health_check_url: "http://localhost:8000/health/"
+    health_check_retries: 30
+
+  tasks:
+    - name: Display rollback info
+      debug:
+        msg: "🔄 Rolling back to previous deployment on OCI: {{ inventory_hostname }}"
+
+    - name: Restore previous .env if exists
+      block:
+        - name: Find backup .env files
+          find:
+            paths: "{{ docker_compose_dir }}"
+            patterns: ".env.backup.*"
+          register: backup_envs
+
+        - name: Get most recent backup
+          set_fact:
+            latest_backup: "{{ backup_envs.files | sort(attribute='mtime', reverse=true) | first }}"
+          when: backup_envs.files | length > 0
+
+        - name: Restore backup environment
+          copy:
+            src: "{{ latest_backup.path }}"
+            dest: "{{ docker_compose_dir }}/.env"
+            remote_src: yes
+            force: yes
+          when: latest_backup is defined
+      when: docker_compose_dir is defined
+
+    - name: Stop current containers
+      shell: "cd {{ docker_compose_dir }} && docker compose down"
+      changed_when: true
+
+    - name: Get previous image version
+      shell: "docker images --format '{{.Repository}}:{{.Tag}}' | grep reko-ai-recommendation-system | tail -2 | head -1"
+      register: previous_image
+      changed_when: false
+
+    - name: Start containers with previous image
+      shell: |
+        cd {{ docker_compose_dir }}
+        export DOCKER_IMAGE="{{ previous_image.stdout }}"
+        docker compose up -d
+      when: previous_image.stdout != ""
+
+    - name: Wait for application to recover
+      uri:
+        url: "{{ health_check_url }}"
+        status_code: 200
+        method: GET
+        timeout: 10
+      register: health_check
+      until: health_check.status == 200
+      retries: "{{ health_check_retries }}"
+      delay: 5
+      failed_when: false

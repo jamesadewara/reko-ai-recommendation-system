@@ -1,0 +1,17 @@
+# Reko AI Recommendation System - OCI A1 Inventory
+# Configure this via GitHub Secrets in the workflow
+
+all:
+  children:
+    reko_oci_instances:
+      hosts:
+        reko-rec-prod:
+          ansible_host: "{{ host_ip }}"
+          ansible_user: "{{ ansible_user }}"
+          ansible_ssh_private_key_file: ~/.ssh/deploy_key
+          ansible_port: 22
+      vars:
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        app_name: reko-ai-recommendation-system
+        app_port: 8000
