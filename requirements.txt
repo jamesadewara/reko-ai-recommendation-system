@@ -1,13 +1,70 @@
-aiosqlite==0.20.0
-alembic==1.13.1
-fastapi==0.110.0
-pydantic==2.6.3
-pydantic-settings==2.2.1
-pydantic_core==2.16.3
+# --- Core API & Async Web ---
+fastapi
+pydantic
+pydantic-settings
+pydantic-core
+uvicorn
+httpx
+websockets
+sse-starlette
+
+# --- Auth (JWT validation against Esther's service) ---
 PyJWT==2.8.0
-uvicorn==0.27.1
-taskiq[reload]==0.12.2
+cryptography==48.0.0
+
+# --- Database: Beanie (ODM) + PyMongo (sync) ---
 beanie==2.1.0
 pymongo==4.16.0
-httpx==0.27.2
+
+# --- Task Queue: Taskiq + RabbitMQ (aio-pika) ---
+taskiq[reload]==0.12.2
+taskiq-aio-pika==0.4.0
 aio-pika==9.4.3
+
+# --- ML & Deep Learning ---
+torch==2.11.0
+transformers==5.8.0
+sentence-transformers==5.4.1
+
+# --- Vector Search ---
+faiss-cpu==1.13.2          # Use faiss-gpu if deploying on GPU instance
+
+# --- NLP & Linguistic Analysis ---
+spacy==3.8.14
+
+# --- LLM Router (DeepSeek / Gemini) ---
+litellm==1.83.14
+openai
+
+# --- Topic Modeling & Classical ML ---
+numpy==2.4.4
+
+# --- Web Scraping & Deep Search ---
+tavily-python==0.7.24
+
+# --- Evaluation Metrics ---
+bert-score==0.3.13
+
+# --- Monitoring & Logging ---
+loguru==0.7.3
+tenacity==9.1.4
+
+# --- Utilities ---
+typer==0.21.1
+
+# --- Conditional: AWS S3 (ONLY when DEBUG=False) ---
+# boto3==1.35.0
+# botocore==1.35.0
+# ^ Uncomment in production requirements. In dev, settings.DEBUG=True uses localStorage.
+
+# --- Development & Testing ---
+pytest==9.0.3
+pytest-asyncio==1.3.0
+pytest-cov==7.1.0
+black==26.3.1
+isort==8.0.1
+flake8==7.3.0
+mypy==2.0.0
+
+# --- Production Server --- (used as process manager)
+gunicorn==26.0.0
